@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neural Network — Digit Recognition</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0d1117; color: #c9d1d9; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; padding: 2rem;
+  }
+  h1 { font-size: 1.8rem; font-weight: 600; color: #f0f6fc; margin-bottom: 0.3rem; }
+  h1 span { color: #58a6ff; }
+  .subtitle { color: #8b949e; font-size: 0.9rem; margin-bottom: 1.5rem; }
+  .container { display: flex; gap: 3rem; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+  .draw-area { text-align: center; }
+  .grid {
+    display: grid; grid-template-columns: repeat(5, 60px); gap: 2px;
+    background: #21262d; padding: 2px; border-radius: 8px; border: 1px solid #30363d;
+    cursor: pointer; user-select: none;
+  }
+  .cell {
+    width: 60px; height: 60px; background: #0d1117; border-radius: 4px;
+    transition: background 0.1s;
+  }
+  .cell.active { background: #58a6ff; }
+  .cell:hover { background: #1f6feb; }
+  button {
+    margin-top: 1rem; background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 0.5rem 1.5rem; border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+  }
+  button:hover { border-color: #58a6ff; }
+  .results { min-width: 250px; }
+  .result-bar {
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;
+  }
+  .result-bar .digit { font-size: 1.2rem; font-weight: 600; width: 1.5rem; text-align: center; color: #f0f6fc; }
+  .result-bar .bar-bg {
+    flex: 1; height: 24px; background: #21262d; border-radius: 4px; overflow: hidden;
+  }
+  .result-bar .bar-fill {
+    height: 100%; background: #238636; border-radius: 4px; transition: width 0.3s;
+    min-width: 2px;
+  }
+  .result-bar .bar-fill.top { background: #58a6ff; }
+  .result-bar .pct { font-size: 0.8rem; color: #8b949e; width: 3.5rem; text-align: right; }
+  .prediction { text-align: center; font-size: 3rem; font-weight: 700; color: #58a6ff; margin-bottom: 1rem; }
+  .train-info { margin-top: 2rem; color: #8b949e; font-size: 0.8rem; text-align: center; }
+  .status { color: #58a6ff; font-size: 0.9rem; margin-bottom: 1rem; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>🧠 <span>Neural Network</span></h1>
+<p class="subtitle">Draw a digit (0-9) — classified in real-time by a network trained from scratch</p>
+<div class="status" id="status">Training...</div>
+
+<div class="container">
+  <div class="draw-area">
+    <div class="grid" id="grid"></div>
+    <button onclick="clearGrid()">Clear</button>
+    <button onclick="randomDigit()">Random</button>
+  </div>
+  <div class="results">
+    <div class="prediction" id="prediction">?</div>
+    <div id="bars"></div>
+  </div>
+</div>
+
+<div class="train-info">
+  <p>Network: 25→32→16→10 (ReLU + Softmax) | Trained on 1000 noisy 5×5 digit images</p>
+  <p>Built from scratch in JavaScript — no TensorFlow, no PyTorch, no dependencies</p>
+  <p style="margin-top:0.5rem"><a href="https://github.com/henry-the-frog/neural-net" style="color:#58a6ff;text-decoration:none">Source on GitHub</a></p>
+</div>
+
+<script>
+// ===== Inline Neural Network (minimal for browser) =====
+class Matrix {
+  constructor(r, c, d) { this.rows=r; this.cols=c; this.data=d||new Float64Array(r*c); }
+  get(r,c) { return this.data[r*this.cols+c]; }
+  set(r,c,v) { this.data[r*this.cols+c]=v; }
+  fill(v) { this.data.fill(v); return this; }
+  randomize(s) { s=s||Math.sqrt(2/(this.rows+this.cols)); for(let i=0;i<this.data.length;i++) this.data[i]=(Math.random()*2-1)*s; return this; }
+  dot(o) { const r=new Matrix(this.rows,o.cols); for(let i=0;i<this.rows;i++) for(let j=0;j<o.cols;j++) { let s=0; for(let k=0;k<this.cols;k++) s+=this.data[i*this.cols+k]*o.data[k*o.cols+j]; r.data[i*o.cols+j]=s; } return r; }
+  add(o) {
+    if(o instanceof Matrix) {
+      if(o.rows===1&&this.cols===o.cols) { const r=new Matrix(this.rows,this.cols); for(let i=0;i<this.rows;i++) for(let j=0;j<this.cols;j++) r.data[i*this.cols+j]=this.data[i*this.cols+j]+o.data[j]; return r; }
+      const r=new Matrix(this.rows,this.cols); for(let i=0;i<this.data.length;i++) r.data[i]=this.data[i]+o.data[i]; return r;
+    }
+    const r=new Matrix(this.rows,this.cols); for(let i=0;i<this.data.length;i++) r.data[i]=this.data[i]+o; return r;
+  }
+  sub(o) { const r=new Matrix(this.rows,this.cols); if(o instanceof Matrix) for(let i=0;i<this.data.length;i++) r.data[i]=this.data[i]-o.data[i]; else for(let i=0;i<this.data.length;i++) r.data[i]=this.data[i]-o; return r; }
+  mul(o) { const r=new Matrix(this.rows,this.cols); if(o instanceof Matrix) for(let i=0;i<this.data.length;i++) r.data[i]=this.data[i]*o.data[i]; else for(let i=0;i<this.data.length;i++) r.data[i]=this.data[i]*o; return r; }
+  T() { const r=new Matrix(this.cols,this.rows); for(let i=0;i<this.rows;i++) for(let j=0;j<this.cols;j++) r.data[j*this.rows+i]=this.data[i*this.cols+j]; return r; }
+  map(fn) { const r=new Matrix(this.rows,this.cols); for(let i=0;i<this.data.length;i++) r.data[i]=fn(this.data[i]); return r; }
+  sumAxis(a) { if(a===0) { const r=new Matrix(1,this.cols); for(let j=0;j<this.cols;j++){let s=0;for(let i=0;i<this.rows;i++)s+=this.data[i*this.cols+j];r.data[j]=s;} return r; } }
+  argmax() { const r=[]; for(let i=0;i<this.rows;i++){let m=-Infinity,mi=0;for(let j=0;j<this.cols;j++){const v=this.data[i*this.cols+j];if(v>m){m=v;mi=j;}}r.push(mi);} return r; }
+  clone() { return new Matrix(this.rows,this.cols,new Float64Array(this.data)); }
+  static zeros(r,c) { return new Matrix(r,c); }
+  static ones(r,c) { return new Matrix(r,c).fill(1); }
+  static random(r,c) { return new Matrix(r,c).randomize(); }
+  static fromArray(a) { if(Array.isArray(a[0])){const r=a.length,c=a[0].length,m=new Matrix(r,c);for(let i=0;i<r;i++)for(let j=0;j<c;j++)m.set(i,j,a[i][j]);return m;} const m=new Matrix(a.length,1);for(let i=0;i<a.length;i++)m.data[i]=a[i];return m; }
+  static oneHot(idx,nc) { const m=new Matrix(idx.length,nc); for(let i=0;i<idx.length;i++)m.set(i,idx[i],1); return m; }
+}
+
+const relu = { forward(x){return x.map(v=>Math.max(0,v));}, backward(o){return o.map(v=>v>0?1:0);}, name:'relu' };
+const softmaxFn = { forward(x){const r=new Matrix(x.rows,x.cols);for(let i=0;i<x.rows;i++){let mx=-Infinity;for(let j=0;j<x.cols;j++){const v=x.get(i,j);if(v>mx)mx=v;}let se=0;for(let j=0;j<x.cols;j++)se+=Math.exp(x.get(i,j)-mx);for(let j=0;j<x.cols;j++)r.set(i,j,Math.exp(x.get(i,j)-mx)/se);}return r;}, backward(o){return Matrix.ones(o.rows,o.cols);}, name:'softmax' };
+
+class Dense {
+  constructor(inS,outS,act){this.w=Matrix.random(inS,outS);this.b=Matrix.zeros(1,outS);this.act=act==='softmax'?softmaxFn:relu;this.input=null;this.z=null;this.a=null;}
+  forward(x){this.input=x;this.z=x.dot(this.w).add(this.b);this.a=this.act.forward(this.z);return this.a;}
+  backward(dO){let dz=this.act.name==='softmax'?dO:dO.mul(this.act.backward(this.a));this.dW=this.input.T().dot(dz);this.dB=dz.sumAxis(0);return dz.dot(this.w.T());}
+  update(lr){const bs=this.input.rows;this.w=this.w.sub(this.dW.mul(lr/bs));this.b=this.b.sub(this.dB.mul(lr/bs));}
+}
+
+// Digit patterns (5×5)
+const DIGITS = [
+  [0,1,1,1,0,1,0,0,0,1,1,0,0,0,1,1,0,0,0,1,0,1,1,1,0],
+  [0,0,1,0,0,0,1,1,0,0,0,0,1,0,0,0,0,1,0,0,0,1,1,1,0],
+  [0,1,1,1,0,0,0,0,0,1,0,1,1,1,0,1,0,0,0,0,1,1,1,1,1],
+  [1,1,1,1,0,0,0,0,0,1,0,1,1,1,0,0,0,0,0,1,1,1,1,1,0],
+  [1,0,0,1,0,1,0,0,1,0,1,1,1,1,1,0,0,0,1,0,0,0,0,1,0],
+  [1,1,1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,0,0,1,1,1,1,1,0],
+  [0,1,1,1,0,1,0,0,0,0,1,1,1,1,0,1,0,0,0,1,0,1,1,1,0],
+  [1,1,1,1,1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,0,1,0,0,0],
+  [0,1,1,1,0,1,0,0,0,1,0,1,1,1,0,1,0,0,0,1,0,1,1,1,0],
+  [0,1,1,1,0,1,0,0,0,1,0,1,1,1,1,0,0,0,0,1,0,1,1,1,0],
+];
+
+// Train network
+const layers = [new Dense(25,32,'relu'), new Dense(32,16,'relu'), new Dense(16,10,'softmax')];
+
+function forward(input) {
+  let x = input;
+  for (const l of layers) x = l.forward(x);
+  return x;
+}
+
+function trainBatch(input, target, lr) {
+  const output = forward(input);
+  let grad = output.sub(target);
+  for (let i = layers.length-1; i >= 0; i--) grad = layers[i].backward(grad);
+  for (const l of layers) l.update(lr);
+}
+
+// Generate noisy training data
+function genData(n) {
+  const inputs = [], labels = [];
+  for (let d = 0; d < 10; d++) {
+    for (let s = 0; s < n; s++) {
+      inputs.push(DIGITS[d].map(p => p + (Math.random()-0.5)*0.3 + (Math.random()<0.1?(p?-1:1):0)));
+      labels.push(d);
+    }
+  }
+  // Shuffle
+  for (let i = inputs.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [inputs[i],inputs[j]]=[inputs[j],inputs[i]]; [labels[i],labels[j]]=[labels[j],labels[i]]; }
+  return { inputs: Matrix.fromArray(inputs), targets: Matrix.oneHot(labels, 10) };
+}
+
+// Train
+const data = genData(100);
+for (let epoch = 0; epoch < 300; epoch++) {
+  for (let i = 0; i < data.inputs.rows; i += 32) {
+    const end = Math.min(i+32, data.inputs.rows);
+    const bIn = new Matrix(end-i, 25);
+    const bTgt = new Matrix(end-i, 10);
+    for (let r = 0; r < end-i; r++) { for (let c = 0; c < 25; c++) bIn.set(r,c,data.inputs.get(i+r,c)); for (let c = 0; c < 10; c++) bTgt.set(r,c,data.targets.get(i+r,c)); }
+    trainBatch(bIn, bTgt, 0.5);
+  }
+}
+
+document.getElementById('status').textContent = 'Ready — draw a digit!';
+
+// ===== UI =====
+const grid = document.getElementById('grid');
+const cells = [];
+let pixels = new Array(25).fill(0);
+let isDrawing = false;
+
+for (let i = 0; i < 25; i++) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  cell.addEventListener('mousedown', () => { isDrawing = true; toggle(i); });
+  cell.addEventListener('mouseenter', () => { if (isDrawing) toggle(i); });
+  cell.addEventListener('touchstart', (e) => { e.preventDefault(); toggle(i); });
+  cells.push(cell);
+  grid.appendChild(cell);
+}
+window.addEventListener('mouseup', () => isDrawing = false);
+
+function toggle(i) {
+  pixels[i] = 1;
+  cells[i].classList.add('active');
+  classify();
+}
+
+function clearGrid() {
+  pixels.fill(0);
+  cells.forEach(c => c.classList.remove('active'));
+  document.getElementById('prediction').textContent = '?';
+  updateBars(new Array(10).fill(0));
+}
+
+function randomDigit() {
+  clearGrid();
+  const d = Math.floor(Math.random() * 10);
+  const pattern = DIGITS[d];
+  for (let i = 0; i < 25; i++) {
+    if (pattern[i]) { pixels[i] = 1; cells[i].classList.add('active'); }
+  }
+  classify();
+}
+
+function classify() {
+  if (pixels.every(p => p === 0)) return;
+  const input = Matrix.fromArray([pixels]);
+  const output = forward(input);
+  const probs = [];
+  for (let i = 0; i < 10; i++) probs.push(output.get(0, i));
+  const predicted = probs.indexOf(Math.max(...probs));
+  document.getElementById('prediction').textContent = predicted;
+  updateBars(probs);
+}
+
+function updateBars(probs) {
+  const maxProb = Math.max(...probs);
+  const barsDiv = document.getElementById('bars');
+  barsDiv.innerHTML = '';
+  for (let i = 0; i < 10; i++) {
+    const pct = (probs[i] * 100).toFixed(1);
+    const isTop = probs[i] === maxProb && maxProb > 0;
+    barsDiv.innerHTML += `<div class="result-bar"><span class="digit">${i}</span><div class="bar-bg"><div class="bar-fill${isTop?' top':''}" style="width:${pct}%"></div></div><span class="pct">${pct}%</span></div>`;
+  }
+}
+
+// Init bars
+updateBars(new Array(10).fill(0));
+</script>
+</body>
+</html>
