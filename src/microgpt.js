@@ -1,0 +1,211 @@
+// microgpt.js — Tiny character-level language model using transformer blocks
+// Demonstrates: Embedding → PositionalEncoding → TransformerEncoder → Dense → Softmax
+
+import { Matrix } from './matrix.js';
+import { Dense } from './layer.js';
+import { Embedding } from './embedding.js';
+import { PositionalEncoding, LayerNorm, TransformerEncoderBlock } from './transformer.js';
+import { getLoss } from './loss.js';
+
+/**
+ * MicroGPT — character-level language model
+ * Architecture: Embedding → PE → N × TransformerEncoder → Dense → Softmax
+ */
+export class MicroGPT {
+  constructor({
+    vocabSize = 128,
+    dModel = 32,
+    numHeads = 2,
+    numLayers = 1,
+    maxSeqLen = 32,
+    dFF = null,
+  }) {
+    this.vocabSize = vocabSize;
+    this.dModel = dModel;
+    this.maxSeqLen = maxSeqLen;
+    
+    // Build model
+    this.embedding = new Embedding(vocabSize, dModel);
+    this.pe = new PositionalEncoding(dModel, maxSeqLen);
+    
+    this.transformerBlocks = [];
+    for (let i = 0; i < numLayers; i++) {
+      this.transformerBlocks.push(new TransformerEncoderBlock(dModel, numHeads, dFF || dModel * 2));
+    }
+    
+    this.outputNorm = new LayerNorm(dModel);
+    // Output projection: takes last position's embedding → vocab logits
+    this.outputProj = new Dense(dModel, vocabSize, 'softmax');
+    
+    this.loss = getLoss('crossEntropy');
+    
+    this.allLayers = [this.embedding, this.pe, ...this.transformerBlocks, this.outputNorm, this.outputProj];
+  }
+  
+  /**
+   * Forward pass
+   * input: [batch, seqLen] — token IDs
+   * returns: [batch, vocabSize] — next token probabilities
+   */
+  forward(input) {
+    const seqLen = input.cols;
+    
+    // Embedding + positional encoding
+    let x = this.embedding.forward(input);
+    x = this.pe.forward(x);
+    
+    // Transformer blocks
+    for (const block of this.transformerBlocks) {
+      x = block.forward(x);
+    }
+    
+    // Layer norm
+    x = this.outputNorm.forward(x);
+    
+    // Take last position's output: [batch, dModel]
+    const lastPos = new Matrix(input.rows, this.dModel);
+    for (let b = 0; b < input.rows; b++) {
+      const offset = (seqLen - 1) * this.dModel;
+      for (let d = 0; d < this.dModel; d++) {
+        lastPos.set(b, d, x.get(b, offset + d));
+      }
+    }
+    
+    // Project to vocab
+    return this.outputProj.forward(lastPos);
+  }
+  
+  /**
+   * Train on sequence data
+   * sequences: array of token ID arrays (each is a training sequence)
+   */
+  train(sequences, { epochs = 10, learningRate = 0.001, verbose = false } = {}) {
+    const history = [];
+    
+    for (const l of this.allLayers) l.training = true;
+    
+    for (let epoch = 0; epoch < epochs; epoch++) {
+      let epochLoss = 0;
+      let batches = 0;
+      
+      // Shuffle sequences
+      const shuffled = [...sequences];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      
+      for (const seq of shuffled) {
+        if (seq.length < 2) continue;
+        
+        // Create input-target pairs: predict next token
+        const seqLen = Math.min(seq.length - 1, this.maxSeqLen);
+        const input = new Matrix(1, seqLen);
+        for (let t = 0; t < seqLen; t++) input.set(0, t, seq[t]);
+        
+        // Target: one-hot of next token
+        const targetToken = seq[seqLen];
+        const target = Matrix.zeros(1, this.vocabSize);
+        target.set(0, targetToken, 1);
+        
+        // Forward
+        const output = this.forward(input);
+        const loss = this.loss.compute(output, target);
+        epochLoss += loss;
+        
+        // Backward through output projection only (simplified training)
+        let grad = this.loss.gradient(output, target);
+        this.outputProj.backward(grad);
+        
+        // Update output projection and embedding
+        this.outputProj.update(learningRate, 0, 'sgd');
+        if (this.embedding.dWeights) this.embedding.update(learningRate);
+        
+        batches++;
+      }
+      
+      const avgLoss = epochLoss / Math.max(batches, 1);
+      history.push(avgLoss);
+      
+      if (verbose && epoch % Math.max(1, Math.floor(epochs / 10)) === 0) {
+        console.log(`Epoch ${epoch + 1}/${epochs} — Loss: ${avgLoss.toFixed(4)}`);
+      }
+    }
+    
+    for (const l of this.allLayers) l.training = false;
+    return history;
+  }
+  
+  /**
+   * Generate text character by character
+   */
+  generate(prompt, length = 50, temperature = 1.0) {
+    const tokens = [...prompt];
+    
+    for (let i = 0; i < length; i++) {
+      const contextLen = Math.min(tokens.length, this.maxSeqLen);
+      const context = tokens.slice(-contextLen);
+      
+      const input = new Matrix(1, context.length);
+      for (let t = 0; t < context.length; t++) {
+        input.set(0, t, context[t]);
+      }
+      
+      const probs = this.forward(input);
+      
+      // Temperature sampling
+      const logits = [];
+      for (let v = 0; v < this.vocabSize; v++) {
+        logits.push(Math.log(Math.max(probs.get(0, v), 1e-10)) / temperature);
+      }
+      
+      // Softmax
+      const maxLogit = Math.max(...logits);
+      const exps = logits.map(l => Math.exp(l - maxLogit));
+      const sum = exps.reduce((a, b) => a + b);
+      const dist = exps.map(e => e / sum);
+      
+      // Sample
+      let r = Math.random(), cumulative = 0;
+      let nextToken = 0;
+      for (let v = 0; v < this.vocabSize; v++) {
+        cumulative += dist[v];
+        if (r < cumulative) { nextToken = v; break; }
+      }
+      
+      tokens.push(nextToken);
+    }
+    
+    return tokens;
+  }
+  
+  paramCount() {
+    return this.allLayers.reduce((s, l) => s + (l.paramCount ? l.paramCount() : 0), 0);
+  }
+}
+
+/**
+ * Helper: encode string to token IDs (character-level)
+ */
+export function encodeText(text) {
+  return [...text].map(c => c.charCodeAt(0));
+}
+
+/**
+ * Helper: decode token IDs to string
+ */
+export function decodeTokens(tokens) {
+  return tokens.map(t => String.fromCharCode(Math.max(0, Math.min(127, t)))).join('');
+}
+
+/**
+ * Helper: create training sequences from text
+ */
+export function createSequences(text, seqLen = 16) {
+  const tokens = encodeText(text);
+  const sequences = [];
+  for (let i = 0; i <= tokens.length - seqLen - 1; i++) {
+    sequences.push(tokens.slice(i, i + seqLen + 1));
+  }
+  return sequences;
+}

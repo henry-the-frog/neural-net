@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MNIST Demo — Neural Network</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0d1117; color: #c9d1d9; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; padding: 1.5rem;
+  }
+  h1 { font-size: 1.6rem; font-weight: 600; color: #f0f6fc; margin-bottom: 0.2rem; }
+  h1 span { color: #58a6ff; }
+  .subtitle { color: #8b949e; font-size: 0.85rem; margin-bottom: 1rem; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .main { display: flex; gap: 2rem; flex-wrap: wrap; justify-content: center; max-width: 900px; width: 100%; }
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 1.2rem; }
+
+  /* Drawing panel */
+  .draw-panel { text-align: center; min-width: 280px; }
+  .draw-panel h2 { font-size: 1rem; color: #f0f6fc; margin-bottom: 0.8rem; }
+  #drawCanvas {
+    border: 2px solid #30363d; border-radius: 8px; cursor: crosshair;
+    background: #000; display: block; margin: 0 auto 0.8rem;
+    touch-action: none;
+  }
+  .draw-controls { display: flex; gap: 0.5rem; justify-content: center; margin-bottom: 0.8rem; }
+  button {
+    padding: 0.4rem 1rem; border: 1px solid #30363d; background: #21262d;
+    color: #c9d1d9; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+    transition: all 0.15s;
+  }
+  button:hover { background: #30363d; border-color: #58a6ff; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #238636; border-color: #238636; color: #fff; }
+  button.primary:hover { background: #2ea043; }
+
+  /* Prediction panel */
+  .predict-panel { flex: 1; min-width: 260px; }
+  .predict-panel h2 { font-size: 1rem; color: #f0f6fc; margin-bottom: 0.8rem; }
+  .prediction-result {
+    font-size: 3rem; font-weight: 700; color: #58a6ff; text-align: center;
+    margin-bottom: 0.5rem; min-height: 3.5rem;
+  }
+  .confidence-bars { display: flex; flex-direction: column; gap: 4px; }
+  .conf-row { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; }
+  .conf-label { width: 16px; text-align: right; font-weight: 600; color: #8b949e; }
+  .conf-bar-bg {
+    flex: 1; height: 18px; background: #21262d; border-radius: 4px; overflow: hidden;
+    position: relative;
+  }
+  .conf-bar {
+    height: 100%; background: #1f6feb; border-radius: 4px;
+    transition: width 0.3s ease; min-width: 0;
+  }
+  .conf-bar.top { background: #58a6ff; }
+  .conf-pct { width: 36px; text-align: right; font-size: 0.75rem; color: #8b949e; }
+
+  /* Training panel */
+  .train-panel { width: 100%; }
+  .train-panel h2 { font-size: 1rem; color: #f0f6fc; margin-bottom: 0.8rem; }
+  .train-controls { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.8rem; }
+  .train-controls label { font-size: 0.8rem; color: #8b949e; }
+  .train-controls select, .train-controls input[type=number] {
+    background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+    border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem;
+  }
+  .train-status {
+    font-size: 0.85rem; color: #8b949e; margin-bottom: 0.5rem; min-height: 1.2rem;
+  }
+  .train-progress-bar {
+    width: 100%; height: 6px; background: #21262d; border-radius: 3px;
+    overflow: hidden; margin-bottom: 0.8rem;
+  }
+  .train-progress-fill {
+    height: 100%; background: #238636; border-radius: 3px;
+    transition: width 0.2s;
+  }
+
+  /* Loss chart */
+  #lossChart {
+    width: 100%; height: 120px; background: #0d1117; border: 1px solid #21262d;
+    border-radius: 6px;
+  }
+
+  /* Preview grid */
+  .preview-section { margin-top: 1rem; }
+  .preview-section h3 { font-size: 0.85rem; color: #8b949e; margin-bottom: 0.5rem; }
+  .preview-grid { display: flex; gap: 4px; flex-wrap: wrap; }
+  .preview-item { text-align: center; }
+  .preview-canvas { border: 1px solid #21262d; border-radius: 2px; }
+  .preview-label { font-size: 0.65rem; color: #8b949e; }
+
+  /* Stats */
+  .stats-row { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.8rem; }
+  .stat-card {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: 0.5rem 0.8rem; text-align: center;
+  }
+  .stat-value { font-size: 1.3rem; font-weight: 700; color: #58a6ff; }
+  .stat-label { font-size: 0.7rem; color: #8b949e; }
+
+  @media (max-width: 600px) {
+    .main { flex-direction: column; }
+    #drawCanvas { width: 200px !important; height: 200px !important; }
+  }
+</style>
+</head>
+<body>
+<h1>🧠 MNIST <span>Demo</span></h1>
+<p class="subtitle">Draw a digit, watch the neural network predict it in real-time</p>
+
+<div class="main">
+  <div class="panel draw-panel">
+    <h2>✏️ Draw</h2>
+    <canvas id="drawCanvas" width="224" height="224"></canvas>
+    <div class="draw-controls">
+      <button onclick="clearCanvas()">Clear</button>
+      <button onclick="predictDrawing()" class="primary">Predict</button>
+    </div>
+    <div class="preview-section">
+      <h3>Downsampled (8×8)</h3>
+      <canvas id="previewCanvas" width="64" height="64" class="preview-canvas" style="image-rendering: pixelated;"></canvas>
+    </div>
+  </div>
+
+  <div class="panel predict-panel">
+    <h2>🔮 Prediction</h2>
+    <div class="prediction-result" id="predResult">—</div>
+    <div class="confidence-bars" id="confBars"></div>
+    <div class="stats-row" id="statsRow"></div>
+  </div>
+
+  <div class="panel train-panel">
+    <h2>🏋️ Training</h2>
+    <div class="train-controls">
+      <label>Model:
+        <select id="modelSelect">
+          <option value="dense">Dense (64→32→10)</option>
+          <option value="cnn">CNN (Conv→Pool→Dense)</option>
+        </select>
+      </label>
+      <label>Epochs:
+        <input type="number" id="epochsInput" value="100" min="10" max="500" step="10">
+      </label>
+      <label>LR:
+        <input type="number" id="lrInput" value="0.005" min="0.001" max="0.1" step="0.001">
+      </label>
+      <button onclick="startTraining()" id="trainBtn" class="primary">Train</button>
+      <button onclick="stopTraining()" id="stopBtn" disabled>Stop</button>
+    </div>
+    <div class="train-status" id="trainStatus">Not trained — click Train to start</div>
+    <div class="train-progress-bar"><div class="train-progress-fill" id="trainProgress" style="width:0%"></div></div>
+    <canvas id="lossChart"></canvas>
+
+    <div class="preview-section">
+      <h3>Training Data Samples</h3>
+      <div class="preview-grid" id="sampleGrid"></div>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:1rem;font-size:0.75rem;color:#484f58">
+  <a href="./">← Back to main demo</a> · Pure JavaScript · No dependencies · 
+  <a href="https://github.com/henry-the-frog/neural-net" target="_blank">Source</a>
+</p>
+
+<script type="module">
+// Inline the neural network library for browser use
+// We'll import from src/ via ES modules (works with local server)
+import { Matrix } from '../src/matrix.js';
+import { Dense } from '../src/layer.js';
+import { Conv2D, MaxPool2D, Flatten } from '../src/conv.js';
+import { Network } from '../src/network.js';
+import { createMiniDigits, trainTestSplit, predict, evaluate, packBatch } from '../src/mnist.js';
+
+// --- State ---
+let network = null;
+let trainData = null;
+let testData = null;
+let lossHistory = [];
+let isTraining = false;
+let shouldStop = false;
+let trainedAccuracy = 0;
+
+// --- Canvas Drawing ---
+const canvas = document.getElementById('drawCanvas');
+const ctx = canvas.getContext('2d');
+ctx.fillStyle = '#000';
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+ctx.lineWidth = 16;
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+ctx.strokeStyle = '#fff';
+
+let drawing = false;
+let lastX = 0, lastY = 0;
+
+function getPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const touch = e.touches ? e.touches[0] : e;
+  return [
+    (touch.clientX - rect.left) * (canvas.width / rect.width),
+    (touch.clientY - rect.top) * (canvas.height / rect.height),
+  ];
+}
+
+canvas.addEventListener('mousedown', e => { drawing = true; [lastX, lastY] = getPos(e); });
+canvas.addEventListener('mousemove', e => {
+  if (!drawing) return;
+  const [x, y] = getPos(e);
+  ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(x, y); ctx.stroke();
+  [lastX, lastY] = [x, y];
+  updatePreview();
+  if (network) predictDrawing();
+});
+canvas.addEventListener('mouseup', () => { drawing = false; });
+canvas.addEventListener('mouseleave', () => { drawing = false; });
+
+// Touch events
+canvas.addEventListener('touchstart', e => { e.preventDefault(); drawing = true; [lastX, lastY] = getPos(e); });
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!drawing) return;
+  const [x, y] = getPos(e);
+  ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(x, y); ctx.stroke();
+  [lastX, lastY] = [x, y];
+  updatePreview();
+  if (network) predictDrawing();
+});
+canvas.addEventListener('touchend', e => { e.preventDefault(); drawing = false; });
+
+window.clearCanvas = function() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  updatePreview();
+  document.getElementById('predResult').textContent = '—';
+  renderConfBars(null);
+};
+
+// --- Downsample to 8×8 ---
+function getPixels8x8() {
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const cellW = canvas.width / 8;
+  const cellH = canvas.height / 8;
+  const pixels = new Float64Array(64);
+
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      let sum = 0, count = 0;
+      const startY = Math.floor(row * cellH);
+      const endY = Math.floor((row + 1) * cellH);
+      const startX = Math.floor(col * cellW);
+      const endX = Math.floor((col + 1) * cellW);
+      for (let y = startY; y < endY; y++) {
+        for (let x = startX; x < endX; x++) {
+          const idx = (y * canvas.width + x) * 4;
+          sum += imgData.data[idx]; // Red channel (grayscale)
+          count++;
+        }
+      }
+      pixels[row * 8 + col] = (sum / count) / 255;
+    }
+  }
+  return pixels;
+}
+
+function updatePreview() {
+  const preview = document.getElementById('previewCanvas');
+  const pctx = preview.getContext('2d');
+  const pixels = getPixels8x8();
+  const imgData = pctx.createImageData(8, 8);
+  for (let i = 0; i < 64; i++) {
+    const v = Math.round(pixels[i] * 255);
+    imgData.data[i * 4] = v;
+    imgData.data[i * 4 + 1] = v;
+    imgData.data[i * 4 + 2] = v;
+    imgData.data[i * 4 + 3] = 255;
+  }
+  pctx.putImageData(imgData, 0, 0);
+  // Scale up
+  pctx.imageSmoothingEnabled = false;
+  pctx.drawImage(preview, 0, 0, 8, 8, 0, 0, 64, 64);
+}
+
+// --- Prediction ---
+window.predictDrawing = function() {
+  if (!network) return;
+  const pixels = getPixels8x8();
+  const input = new Matrix(64, 1, pixels);
+  const pred = predict(network, input);
+  
+  // Get full output probabilities
+  const inputRow = new Matrix(1, 64, pixels);
+  const output = network.forward(inputRow);
+  
+  document.getElementById('predResult').textContent = pred;
+  renderConfBars(output.data);
+};
+
+function renderConfBars(probs) {
+  const container = document.getElementById('confBars');
+  if (!probs) {
+    container.innerHTML = Array.from({length: 10}, (_, i) =>
+      `<div class="conf-row"><span class="conf-label">${i}</span>
+       <div class="conf-bar-bg"><div class="conf-bar" style="width:0%"></div></div>
+       <span class="conf-pct">—</span></div>`
+    ).join('');
+    return;
+  }
+
+  const maxProb = Math.max(...probs);
+  container.innerHTML = Array.from({length: 10}, (_, i) => {
+    const pct = (probs[i] * 100).toFixed(1);
+    const isTop = probs[i] === maxProb;
+    return `<div class="conf-row"><span class="conf-label" style="${isTop ? 'color:#58a6ff' : ''}">${i}</span>
+     <div class="conf-bar-bg"><div class="conf-bar ${isTop ? 'top' : ''}" style="width:${pct}%"></div></div>
+     <span class="conf-pct" style="${isTop ? 'color:#58a6ff' : ''}">${pct}%</span></div>`;
+  }).join('');
+}
+
+// --- Training ---
+function createNetwork(type) {
+  const net = new Network();
+  if (type === 'cnn') {
+    net.add(new Conv2D(8, 8, 1, 4, 3, 'relu'));
+    net.add(new MaxPool2D(6, 6, 4, 2));
+    net.add(new Flatten(3, 3, 4));
+    net.add(new Dense(36, 10, 'softmax'));
+  } else {
+    net.add(new Dense(64, 32, 'relu'));
+    net.add(new Dense(32, 10, 'softmax'));
+  }
+  net.loss('crossEntropy');
+  return net;
+}
+
+window.startTraining = async function() {
+  if (isTraining) return;
+  isTraining = true;
+  shouldStop = false;
+  document.getElementById('trainBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+
+  const modelType = document.getElementById('modelSelect').value;
+  const epochs = parseInt(document.getElementById('epochsInput').value);
+  const lr = parseFloat(document.getElementById('lrInput').value);
+
+  // Generate data
+  const data = createMiniDigits({ samplesPerDigit: 30, noise: 0.03 });
+  const split = trainTestSplit(data.images, data.labels, data.rawLabels, 0.2);
+  trainData = split.train;
+  testData = split.test;
+
+  // Create network
+  network = createNetwork(modelType);
+  lossHistory = [];
+
+  // Show samples
+  showSamples(data);
+
+  // Pack data
+  const { inputs, targets } = packBatch(trainData.images, trainData.labels);
+
+  const status = document.getElementById('trainStatus');
+  const progress = document.getElementById('trainProgress');
+
+  // Train epoch by epoch with async breaks for UI updates
+  for (let epoch = 0; epoch < epochs; epoch++) {
+    if (shouldStop) break;
+
+    // Set training mode
+    for (const l of network.layers) l.training = true;
+
+    // Mini-batch training
+    const n = inputs.rows;
+    const batchSize = 16;
+    let epochLoss = 0;
+    let batches = 0;
+
+    const indices = Array.from({length: n}, (_, i) => i);
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+
+    for (let start = 0; start < n; start += batchSize) {
+      const end = Math.min(start + batchSize, n);
+      const batchIdx = indices.slice(start, end);
+      const batchInput = new Matrix(batchIdx.length, inputs.cols);
+      const batchTarget = new Matrix(batchIdx.length, targets.cols);
+      for (let i = 0; i < batchIdx.length; i++) {
+        for (let j = 0; j < inputs.cols; j++) batchInput.set(i, j, inputs.get(batchIdx[i], j));
+        for (let j = 0; j < targets.cols; j++) batchTarget.set(i, j, targets.get(batchIdx[i], j));
+      }
+      epochLoss += network.trainBatch(batchInput, batchTarget, lr);
+      batches++;
+    }
+
+    epochLoss /= batches;
+    lossHistory.push(epochLoss);
+
+    // Evaluate periodically
+    const pct = ((epoch + 1) / epochs * 100).toFixed(0);
+    if (epoch % 5 === 0 || epoch === epochs - 1) {
+      const acc = evaluate(network, testData.images, testData.rawLabels);
+      trainedAccuracy = acc;
+      status.textContent = `Epoch ${epoch + 1}/${epochs} — Loss: ${epochLoss.toFixed(4)} — Accuracy: ${(acc * 100).toFixed(1)}%`;
+    } else {
+      status.textContent = `Epoch ${epoch + 1}/${epochs} — Loss: ${epochLoss.toFixed(4)}`;
+    }
+    progress.style.width = pct + '%';
+    drawLossChart();
+
+    // Yield to UI every few epochs
+    if (epoch % 3 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+
+  // Final evaluation
+  const finalAcc = evaluate(network, testData.images, testData.rawLabels);
+  trainedAccuracy = finalAcc;
+  status.textContent = `Training complete — ${lossHistory.length} epochs — Accuracy: ${(finalAcc * 100).toFixed(1)}%`;
+  renderStats();
+
+  isTraining = false;
+  document.getElementById('trainBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+};
+
+window.stopTraining = function() { shouldStop = true; };
+
+function drawLossChart() {
+  const canvas = document.getElementById('lossChart');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  if (lossHistory.length < 2) return;
+
+  const maxLoss = Math.max(...lossHistory);
+  const minLoss = Math.min(...lossHistory);
+  const range = maxLoss - minLoss || 1;
+  const padX = 30, padY = 10;
+  const plotW = W - padX * 2, plotH = H - padY * 2;
+
+  // Grid lines
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padY + (plotH * i) / 4;
+    ctx.beginPath(); ctx.moveTo(padX, y); ctx.lineTo(W - padX, y); ctx.stroke();
+  }
+
+  // Loss line
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < lossHistory.length; i++) {
+    const x = padX + (i / (lossHistory.length - 1)) * plotW;
+    const y = padY + (1 - (lossHistory[i] - minLoss) / range) * plotH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px system-ui';
+  ctx.textAlign = 'right';
+  ctx.fillText(maxLoss.toFixed(3), padX - 4, padY + 10);
+  ctx.fillText(minLoss.toFixed(3), padX - 4, H - padY);
+  ctx.textAlign = 'center';
+  ctx.fillText('Epoch ' + lossHistory.length, W / 2, H - 2);
+}
+
+function showSamples(data) {
+  const grid = document.getElementById('sampleGrid');
+  grid.innerHTML = '';
+  // Show 20 random samples
+  for (let i = 0; i < Math.min(20, data.images.length); i++) {
+    const item = document.createElement('div');
+    item.className = 'preview-item';
+    const c = document.createElement('canvas');
+    c.width = 24; c.height = 24; c.className = 'preview-canvas';
+    c.style.imageRendering = 'pixelated';
+    const cctx = c.getContext('2d');
+    const imgData = cctx.createImageData(8, 8);
+    for (let j = 0; j < 64; j++) {
+      const v = Math.round(data.images[i].data[j] * 255);
+      imgData.data[j * 4] = v;
+      imgData.data[j * 4 + 1] = v;
+      imgData.data[j * 4 + 2] = v;
+      imgData.data[j * 4 + 3] = 255;
+    }
+    cctx.putImageData(imgData, 0, 0);
+    cctx.imageSmoothingEnabled = false;
+    cctx.drawImage(c, 0, 0, 8, 8, 0, 0, 24, 24);
+    const label = document.createElement('div');
+    label.className = 'preview-label';
+    label.textContent = data.rawLabels[i];
+    item.appendChild(c);
+    item.appendChild(label);
+    grid.appendChild(item);
+  }
+}
+
+function renderStats() {
+  const row = document.getElementById('statsRow');
+  row.innerHTML = `
+    <div class="stat-card"><div class="stat-value">${(trainedAccuracy * 100).toFixed(1)}%</div><div class="stat-label">accuracy</div></div>
+    <div class="stat-card"><div class="stat-value">${lossHistory.length}</div><div class="stat-label">epochs</div></div>
+    <div class="stat-card"><div class="stat-value">${lossHistory[lossHistory.length-1]?.toFixed(4) || '—'}</div><div class="stat-label">final loss</div></div>
+    <div class="stat-card"><div class="stat-value">${trainData?.images.length || 0}</div><div class="stat-label">train samples</div></div>
+  `;
+}
+
+// Init
+renderConfBars(null);
+</script>
+</body>
+</html>
