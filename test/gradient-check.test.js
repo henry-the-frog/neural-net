@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Matrix } from '../src/matrix.js';
 import { Dense } from '../src/layer.js';
 import { Conv2D, MaxPool2D } from '../src/conv.js';
-import { RNN, LSTM } from '../src/rnn.js';
+import { RNN, LSTM, GRU } from '../src/rnn.js';
 import { Network } from '../src/network.js';
 import { getLoss } from '../src/loss.js';
 import { BatchNorm } from '../src/batchnorm.js';
@@ -519,12 +519,86 @@ describe('Numerical Gradient Checking', () => {
     });
   });
 
+  describe('GRU gradients', () => {
+    it('should match numerical gradients for Wz (update gate)', () => {
+      const gru = new GRU(2, 3);
+      const input = Matrix.fromArray([[0.5, -0.3, 0.8, 0.1, -0.2, 0.4]]);
+      const target = Matrix.fromArray([[1, 0, 0.5]]);
+      const loss = getLoss('mse');
+
+      const output = gru.forward(input);
+      gru.backward(loss.gradient(output, target));
+
+      const numGrads = numericalGradient(() => {
+        const out = gru.forward(input);
+        return loss.compute(out, target);
+      }, gru.Wz.data);
+
+      const err = relativeError(gru._dWz.data, numGrads);
+      assert.ok(err < 1e-4, `GRU Wz gradient error: ${err.toExponential(2)}`);
+    });
+
+    it('should match numerical gradients for Wr (reset gate)', () => {
+      const gru = new GRU(2, 3);
+      const input = Matrix.fromArray([[0.5, -0.3, 0.8, 0.1, -0.2, 0.4]]);
+      const target = Matrix.fromArray([[1, 0, 0.5]]);
+      const loss = getLoss('mse');
+
+      const output = gru.forward(input);
+      gru.backward(loss.gradient(output, target));
+
+      const numGrads = numericalGradient(() => {
+        const out = gru.forward(input);
+        return loss.compute(out, target);
+      }, gru.Wr.data);
+
+      const err = relativeError(gru._dWr.data, numGrads);
+      assert.ok(err < 1e-4, `GRU Wr gradient error: ${err.toExponential(2)}`);
+    });
+
+    it('should match numerical gradients for Wh (candidate)', () => {
+      const gru = new GRU(2, 3);
+      const input = Matrix.fromArray([[0.5, -0.3, 0.8, 0.1, -0.2, 0.4]]);
+      const target = Matrix.fromArray([[1, 0, 0.5]]);
+      const loss = getLoss('mse');
+
+      const output = gru.forward(input);
+      gru.backward(loss.gradient(output, target));
+
+      const numGrads = numericalGradient(() => {
+        const out = gru.forward(input);
+        return loss.compute(out, target);
+      }, gru.Wh.data);
+
+      const err = relativeError(gru._dWh.data, numGrads);
+      assert.ok(err < 1e-4, `GRU Wh gradient error: ${err.toExponential(2)}`);
+    });
+
+    it('should match numerical gradients for bz bias', () => {
+      const gru = new GRU(2, 3);
+      const input = Matrix.fromArray([[0.5, -0.3, 0.8, 0.1, -0.2, 0.4]]);
+      const target = Matrix.fromArray([[1, 0, 0.5]]);
+      const loss = getLoss('mse');
+
+      const output = gru.forward(input);
+      gru.backward(loss.gradient(output, target));
+
+      const numGrads = numericalGradient(() => {
+        const out = gru.forward(input);
+        return loss.compute(out, target);
+      }, gru.bz.data);
+
+      const err = relativeError(gru._dbz.data, numGrads);
+      assert.ok(err < 1e-4, `GRU bz gradient error: ${err.toExponential(2)}`);
+    });
+  });
+
   describe('Gradient flow sanity checks', () => {
     it('should have non-zero gradients at all layers in deep network', () => {
       const net = new Network();
-      net.dense(4, 8, 'relu')
-         .dense(8, 8, 'relu')
-         .dense(8, 4, 'relu')
+      net.dense(4, 8, 'leaky_relu')
+         .dense(8, 8, 'leaky_relu')
+         .dense(8, 4, 'leaky_relu')
          .dense(4, 2, 'sigmoid')
          .loss('mse');
 
