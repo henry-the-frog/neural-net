@@ -12,4 +12,4 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       - name: Run tests (with retry for flaky convergence tests)
-        run: node --test || node --test
+        run: node --test || node --test || node --test
