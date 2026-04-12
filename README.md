@@ -1,6 +1,6 @@
 # neural-net
 
-A comprehensive neural network library built from scratch in JavaScript. No dependencies. 65 source modules, 87 test files, 1175+ tests.
+A comprehensive neural network library built from scratch in JavaScript. No dependencies. 72 source modules, 90+ test files, 1200+ tests.
 
 ## Quick Start
 
@@ -89,6 +89,11 @@ console.log(net.predict(inputs)); // XOR!
 |--------|------------|
 | `model-zoo.js` | Pre-configured architectures (XOR, classifier, autoencoder, etc.) |
 | `training-logger.js` | Metrics tracking, ASCII charts, JSON/CSV export |
+| `datasets.js` | Synthetic datasets (spiral, moons, circles, blobs, sine) |
+| `preprocessing.js` | StandardScaler, MinMaxScaler, oneHotEncode, trainTestSplit |
+| `cross-validation.js` | K-fold cross-validation with accuracy and loss |
+| `early-stopping.js` | Patience-based training termination, best model restore |
+| `metrics.js` | Confusion matrix, precision, recall, F1, classification report |
 | `pruning.js` | Network pruning (structured, unstructured) |
 | `quantization.js` | Weight quantization (int8, float16) |
 | `data-augmentation.js` | Image transforms for training |
