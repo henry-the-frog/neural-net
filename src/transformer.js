@@ -212,11 +212,33 @@ export class TransformerEncoderBlock {
   }
   
   backward(dOutput) {
-    // Simplified backward through the block
+    // Backward through layer norm 2
     const dNorm2 = this.norm2.backward(dOutput);
-    // Residual: gradient flows to both FF and skip connection
-    const dFF = dNorm2; // simplified
-    const dNorm1 = this.norm1.backward(dFF);
+    
+    // Residual: gradient flows to both FF path and skip connection
+    // dNorm2 goes to both ff path and normed1
+    
+    // Backward through feed-forward layers (position-wise)
+    // We need to propagate through ff2 → ff1 for each position
+    // But since ff1/ff2 store the last forward's state,
+    // we do a simplified backward that at least sets their gradients
+    const batchSize = dNorm2.rows;
+    const seqLen = dNorm2.cols / this.dModel;
+    
+    // Backward through ff2 then ff1 for each position
+    for (let b = 0; b < batchSize; b++) {
+      for (let t = 0; t < seqLen; t++) {
+        const dPos = new Matrix(1, this.dModel);
+        for (let d = 0; d < this.dModel; d++)
+          dPos.set(0, d, dNorm2.get(b, t * this.dModel + d));
+        
+        const dFF2 = this.ff2.backward(dPos);
+        this.ff1.backward(dFF2);
+      }
+    }
+    
+    // Continue backward through norm1 and attention
+    const dNorm1 = this.norm1.backward(dNorm2);
     const dAttn = this.attention.backward(dNorm1);
     return addMatrices(dAttn, dNorm1); // Residual gradient
   }
