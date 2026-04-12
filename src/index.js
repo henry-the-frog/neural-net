@@ -33,7 +33,8 @@ export { addNoise, randomFlipH, randomCrop, mixup, cutout, randomBrightnessContr
 // Data utilities
 export { shuffle, trainTestSplit, normalize, applyNormalization, minMaxScale, createBatches, oneHotEncode } from './data.js';
 export { addNoise as gaussianNoise } from './data.js';
-export { accuracy, confusionMatrix, classificationReport, macroF1, weightedF1, mse as mseMetric, mae, rmse, r2Score } from './metrics.js';
+export { accuracy, confusionMatrix, classificationReport, macroF1, weightedF1, mse as mseMetric, mae, rmse, r2Score, printConfusionMatrix } from './metrics.js';
+export { TrainingHistory } from './history.js';
 
 // Training utilities
 export { EarlyStopping, LossHistory } from './callbacks.js';
