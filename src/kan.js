@@ -17,8 +17,15 @@ function bsplineBasis(x, knots, order) {
     for (let i = 0; i < n; i++) {
       if (x >= knots[i] && x < knots[i + 1]) basis[i] = 1;
     }
-    // Handle right endpoint
-    if (x === knots[knots.length - 1]) basis[n - 1] = 1;
+    // Handle right endpoint: assign to last non-degenerate interval
+    if (x >= knots[n]) {
+      for (let i = n - 1; i >= 0; i--) {
+        if (knots[i] < knots[i + 1]) {
+          basis[i] = 1;
+          break;
+        }
+      }
+    }
     return basis;
   }
 
