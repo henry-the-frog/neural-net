@@ -139,3 +139,34 @@ export function r2Score(predicted, actual) {
 export function rmse(predicted, actual) {
   return Math.sqrt(mse(predicted, actual));
 }
+
+/**
+ * Print confusion matrix as ASCII table
+ * @param {number[][]} matrix - Confusion matrix from confusionMatrix()
+ * @param {string[]} labels - Class labels (optional)
+ * @returns {string}
+ */
+export function printConfusionMatrix(matrix, labels = null) {
+  const n = matrix.length;
+  const lbls = labels || Array.from({ length: n }, (_, i) => String(i));
+  
+  // Find max value for padding
+  const maxVal = Math.max(...matrix.flat());
+  const colWidth = Math.max(4, String(maxVal).length + 1);
+  
+  let result = '';
+  result += ''.padStart(colWidth) + '│ ';
+  result += lbls.map(l => l.padStart(colWidth)).join('') + '  ← Predicted\n';
+  result += '─'.repeat(colWidth) + '┼' + '─'.repeat((colWidth + 0) * n + 2) + '\n';
+  
+  for (let i = 0; i < n; i++) {
+    result += lbls[i].padStart(colWidth) + '│ ';
+    for (let j = 0; j < n; j++) {
+      const val = matrix[i][j];
+      result += String(val).padStart(colWidth);
+    }
+    result += (i === Math.floor(n / 2) ? '  ← Actual' : '') + '\n';
+  }
+  
+  return result;
+}
