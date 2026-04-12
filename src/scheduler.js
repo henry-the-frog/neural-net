@@ -1,121 +1,109 @@
-// scheduler.js — Learning rate schedulers for neural network training
-//
-// Schedulers adjust the learning rate during training:
-//   - Warmup: linearly increase lr from 0 to target over warmup steps
-//   - CosineAnnealing: cosine decay from max_lr to min_lr
-//   - StepDecay: multiply lr by factor every N epochs
-//   - WarmupCosine: combine warmup + cosine annealing
+// scheduler.js — Learning rate schedulers
+// Control how the learning rate changes during training
 
-export class ConstantLR {
-  constructor(lr = 0.001) {
-    this.baseLR = lr;
-  }
-  getLR(step, epoch) { return this.baseLR; }
+/**
+ * Step decay: multiply LR by factor every N epochs
+ * @param {number} initialLR - Starting learning rate
+ * @param {number} factor - Decay factor (0-1)
+ * @param {number} stepSize - Epochs between decays
+ */
+export function stepDecay(initialLR, factor = 0.5, stepSize = 10) {
+  return (epoch) => initialLR * Math.pow(factor, Math.floor(epoch / stepSize));
 }
 
-export class LinearWarmup {
-  constructor(baseLR = 0.001, warmupSteps = 100) {
-    this.baseLR = baseLR;
-    this.warmupSteps = warmupSteps;
-  }
-
-  getLR(step) {
-    if (step >= this.warmupSteps) return this.baseLR;
-    return this.baseLR * (step / this.warmupSteps);
-  }
+/**
+ * Exponential decay: LR = initialLR * decay^epoch
+ * @param {number} initialLR
+ * @param {number} decay - Decay rate per epoch (e.g., 0.99)
+ */
+export function exponentialDecay(initialLR, decay = 0.99) {
+  return (epoch) => initialLR * Math.pow(decay, epoch);
 }
 
-export class CosineAnnealing {
-  constructor(maxLR = 0.001, minLR = 0, totalEpochs = 100) {
-    this.maxLR = maxLR;
-    this.minLR = minLR;
-    this.totalEpochs = totalEpochs;
-  }
-
-  getLR(step, epoch) {
-    const progress = epoch / this.totalEpochs;
-    return this.minLR + 0.5 * (this.maxLR - this.minLR) * (1 + Math.cos(Math.PI * progress));
-  }
+/**
+ * Cosine annealing: smooth cosine decay to minimum LR
+ * @param {number} initialLR
+ * @param {number} totalEpochs - Total training epochs
+ * @param {number} minLR - Minimum learning rate
+ */
+export function cosineAnnealing(initialLR, totalEpochs, minLR = 0) {
+  return (epoch) => {
+    const progress = Math.min(epoch / totalEpochs, 1);
+    return minLR + (initialLR - minLR) * 0.5 * (1 + Math.cos(Math.PI * progress));
+  };
 }
 
-export class StepDecay {
-  constructor(baseLR = 0.001, factor = 0.1, stepSize = 30) {
-    this.baseLR = baseLR;
-    this.factor = factor;
-    this.stepSize = stepSize;
-  }
-
-  getLR(step, epoch) {
-    const decays = Math.floor(epoch / this.stepSize);
-    return this.baseLR * Math.pow(this.factor, decays);
-  }
-}
-
-export class WarmupCosine {
-  constructor(maxLR = 0.001, minLR = 0, warmupSteps = 100, totalEpochs = 100) {
-    this.warmup = new LinearWarmup(maxLR, warmupSteps);
-    this.cosine = new CosineAnnealing(maxLR, minLR, totalEpochs);
-    this.warmupSteps = warmupSteps;
-    this.maxLR = maxLR;
-  }
-
-  getLR(step, epoch) {
-    if (step < this.warmupSteps) {
-      return this.warmup.getLR(step);
+/**
+ * Warmup + decay: linear warmup for N epochs, then constant or decay
+ * @param {number} targetLR - Target learning rate after warmup
+ * @param {number} warmupEpochs - Number of warmup epochs
+ * @param {function} afterWarmup - Optional scheduler for after warmup
+ */
+export function warmup(targetLR, warmupEpochs, afterWarmup = null) {
+  return (epoch) => {
+    if (epoch < warmupEpochs) {
+      // Linear warmup: 0 → targetLR
+      return targetLR * (epoch + 1) / warmupEpochs;
     }
-    return this.cosine.getLR(step, epoch);
-  }
+    if (afterWarmup) {
+      return afterWarmup(epoch - warmupEpochs);
+    }
+    return targetLR;
+  };
 }
 
-export class ExponentialDecay {
-  constructor(baseLR = 0.001, decayRate = 0.96, decaySteps = 1000) {
-    this.baseLR = baseLR;
-    this.decayRate = decayRate;
-    this.decaySteps = decaySteps;
-  }
-
-  getLR(step) {
-    return this.baseLR * Math.pow(this.decayRate, step / this.decaySteps);
-  }
+/**
+ * Warmup + cosine annealing: popular modern schedule
+ * @param {number} initialLR
+ * @param {number} warmupEpochs
+ * @param {number} totalEpochs
+ * @param {number} minLR
+ */
+export function warmupCosine(initialLR, warmupEpochs, totalEpochs, minLR = 0) {
+  const cosine = cosineAnnealing(initialLR, totalEpochs - warmupEpochs, minLR);
+  return warmup(initialLR, warmupEpochs, cosine);
 }
 
-export class CyclicLR {
-  constructor(baseLR = 0.0001, maxLR = 0.001, stepSize = 200) {
-    this.baseLR = baseLR;
-    this.maxLR = maxLR;
-    this.stepSize = stepSize;
-  }
-
-  getLR(step) {
-    const cycle = Math.floor(1 + step / (2 * this.stepSize));
-    const x = Math.abs(step / this.stepSize - 2 * cycle + 1);
-    return this.baseLR + (this.maxLR - this.baseLR) * Math.max(0, 1 - x);
-  }
+/**
+ * Cyclic learning rate: oscillate between bounds
+ * @param {number} baseLR - Minimum LR
+ * @param {number} maxLR - Maximum LR
+ * @param {number} cycleLength - Epochs per cycle
+ */
+export function cyclicLR(baseLR, maxLR, cycleLength = 20) {
+  return (epoch) => {
+    const cycle = Math.floor(epoch / cycleLength);
+    const x = Math.abs(2 * (epoch / cycleLength - cycle) - 1);
+    return baseLR + (maxLR - baseLR) * Math.max(0, 1 - x);
+  };
 }
 
-export class LinearDecay {
-  constructor(startLR = 0.01, endLR = 0.0001, totalEpochs = 100) {
-    this.startLR = startLR || 0.01;
-    this.endLR = endLR || 0.0001;
-    this.totalEpochs = totalEpochs || 100;
-  }
+/**
+ * Reduce on plateau: not epoch-based, but loss-based
+ * Requires manual tracking of loss history.
+ * @param {number} initialLR
+ * @param {number} factor
+ * @param {number} patience - Epochs to wait before reducing
+ */
+export function reduceLROnPlateau(initialLR, factor = 0.5, patience = 5) {
+  let currentLR = initialLR;
+  let bestLoss = Infinity;
+  let waitCount = 0;
 
-  getLR(step) {
-    const t = Math.min(step / Math.max(1, this.totalEpochs - 1), 1);
-    return this.startLR + (this.endLR - this.startLR) * t;
-  }
-}
-
-export function createScheduler(name, options = {}) {
-  switch (name) {
-    case 'constant': return new ConstantLR(options.lr);
-    case 'warmup': return new LinearWarmup(options.lr, options.warmupSteps);
-    case 'cosine': return new CosineAnnealing(options.maxLR || options.lr, options.minLR, options.totalEpochs);
-    case 'step': return new StepDecay(options.lr, options.factor, options.stepSize);
-    case 'warmup_cosine': return new WarmupCosine(options.maxLR || options.lr, options.minLR, options.warmupSteps, options.totalEpochs);
-    case 'exponential': return new ExponentialDecay(options.lr, options.decayRate, options.decaySteps);
-    case 'cyclic': return new CyclicLR(options.baseLR, options.maxLR || options.lr, options.stepSize);
-    case 'linear': return new LinearDecay(options.lr || options.baseLR, options.endLR, options.totalEpochs);
-    default: throw new Error(`Unknown scheduler: ${name}`);
-  }
+  return {
+    getLR() { return currentLR; },
+    step(loss) {
+      if (loss < bestLoss * 0.999) {
+        bestLoss = loss;
+        waitCount = 0;
+      } else {
+        waitCount++;
+        if (waitCount >= patience) {
+          currentLR *= factor;
+          waitCount = 0;
+        }
+      }
+      return currentLR;
+    }
+  };
 }

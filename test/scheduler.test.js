@@ -1,98 +1,137 @@
+// scheduler.test.js — Tests for learning rate schedulers
+
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { ConstantLR, LinearWarmup, CosineAnnealing, StepDecay, WarmupCosine, ExponentialDecay, CyclicLR, createScheduler } from '../src/scheduler.js';
+import {
+  stepDecay, exponentialDecay, cosineAnnealing,
+  warmup, warmupCosine, cyclicLR, reduceLROnPlateau
+} from '../src/scheduler.js';
 
 describe('Learning Rate Schedulers', () => {
-  describe('ConstantLR', () => {
-    it('returns same lr always', () => {
-      const s = new ConstantLR(0.01);
-      assert.equal(s.getLR(0), 0.01);
-      assert.equal(s.getLR(100), 0.01);
+  describe('stepDecay', () => {
+    it('should maintain LR within a step', () => {
+      const sched = stepDecay(0.1, 0.5, 10);
+      assert.equal(sched(0), 0.1);
+      assert.equal(sched(5), 0.1);
+      assert.equal(sched(9), 0.1);
+    });
+
+    it('should halve LR every 10 epochs', () => {
+      const sched = stepDecay(0.1, 0.5, 10);
+      assert.ok(Math.abs(sched(10) - 0.05) < 1e-10);
+      assert.ok(Math.abs(sched(20) - 0.025) < 1e-10);
+      assert.ok(Math.abs(sched(30) - 0.0125) < 1e-10);
     });
   });
 
-  describe('LinearWarmup', () => {
-    it('starts at 0 and ramps up', () => {
-      const s = new LinearWarmup(0.01, 100);
-      assert.equal(s.getLR(0), 0);
-      assert.ok(Math.abs(s.getLR(50) - 0.005) < 0.001);
-      assert.ok(Math.abs(s.getLR(100) - 0.01) < 0.001);
+  describe('exponentialDecay', () => {
+    it('should decay smoothly', () => {
+      const sched = exponentialDecay(0.1, 0.9);
+      assert.equal(sched(0), 0.1);
+      assert.ok(Math.abs(sched(1) - 0.09) < 1e-10);
+      assert.ok(sched(10) < sched(0));
     });
-    it('stays at base after warmup', () => {
-      const s = new LinearWarmup(0.01, 100);
-      assert.equal(s.getLR(200), 0.01);
+
+    it('should approach zero', () => {
+      const sched = exponentialDecay(0.1, 0.5);
+      assert.ok(sched(100) < 0.001);
     });
   });
 
-  describe('CosineAnnealing', () => {
-    it('starts at max and decays to min', () => {
-      const s = new CosineAnnealing(0.01, 0.0001, 100);
-      assert.ok(Math.abs(s.getLR(0, 0) - 0.01) < 0.001);
-      assert.ok(Math.abs(s.getLR(0, 100) - 0.0001) < 0.001);
+  describe('cosineAnnealing', () => {
+    it('should start at initial LR', () => {
+      const sched = cosineAnnealing(0.1, 100);
+      assert.equal(sched(0), 0.1);
     });
-    it('follows cosine curve', () => {
-      const s = new CosineAnnealing(0.01, 0, 100);
-      const midLR = s.getLR(0, 50);
-      assert.ok(Math.abs(midLR - 0.005) < 0.001); // cos(pi/2) = 0 → 0.5 * max
+
+    it('should end at min LR', () => {
+      const sched = cosineAnnealing(0.1, 100, 0.001);
+      const final = sched(100);
+      assert.ok(Math.abs(final - 0.001) < 0.01, `Final LR: ${final}`);
+    });
+
+    it('should be at midpoint at half-way', () => {
+      const sched = cosineAnnealing(0.1, 100, 0);
+      const mid = sched(50);
+      assert.ok(Math.abs(mid - 0.05) < 0.01, `Mid LR: ${mid}`);
     });
   });
 
-  describe('StepDecay', () => {
-    it('decays at step intervals', () => {
-      const s = new StepDecay(0.01, 0.1, 30);
-      assert.ok(Math.abs(s.getLR(0, 0) - 0.01) < 0.0001);
-      assert.ok(Math.abs(s.getLR(0, 30) - 0.001) < 0.0001);
-      assert.ok(Math.abs(s.getLR(0, 60) - 0.0001) < 0.00001);
+  describe('warmup', () => {
+    it('should linearly increase during warmup', () => {
+      const sched = warmup(0.1, 10);
+      assert.ok(Math.abs(sched(0) - 0.01) < 1e-10); // 1/10 of target
+      assert.ok(Math.abs(sched(4) - 0.05) < 1e-10); // 5/10 of target
+      assert.ok(Math.abs(sched(9) - 0.1) < 1e-10);  // 10/10 of target
+    });
+
+    it('should maintain target after warmup', () => {
+      const sched = warmup(0.1, 5);
+      assert.equal(sched(10), 0.1);
+      assert.equal(sched(100), 0.1);
     });
   });
 
-  describe('WarmupCosine', () => {
-    it('warms up then decays', () => {
-      const s = new WarmupCosine(0.01, 0.0001, 100, 50);
+  describe('warmupCosine', () => {
+    it('should warmup then decay', () => {
+      const sched = warmupCosine(0.1, 5, 100);
       // During warmup
-      assert.equal(s.getLR(0, 0), 0);
-      assert.ok(s.getLR(50, 0) > 0); // halfway through warmup
-      // After warmup — should follow cosine
-      assert.ok(s.getLR(100, 0) >= 0.009); // near max
-      assert.ok(s.getLR(100, 50) < 0.001); // near min
+      assert.ok(sched(0) < sched(4));
+      // Peak at end of warmup
+      assert.ok(Math.abs(sched(5) - 0.1) < 0.02);
+      // Decays after
+      assert.ok(sched(90) < sched(10));
     });
   });
 
-  describe('ExponentialDecay', () => {
-    it('decays exponentially', () => {
-      const s = new ExponentialDecay(0.01, 0.96, 1000);
-      const lr0 = s.getLR(0);
-      const lr1000 = s.getLR(1000);
-      assert.ok(lr0 > lr1000);
-      assert.ok(Math.abs(lr1000 - 0.01 * 0.96) < 0.001);
+  describe('cyclicLR', () => {
+    it('should oscillate between bounds', () => {
+      const sched = cyclicLR(0.001, 0.1, 10);
+      // Should always be in [baseLR, maxLR]
+      for (let i = 0; i < 50; i++) {
+        const lr = sched(i);
+        assert.ok(lr >= 0.001 - 1e-10 && lr <= 0.1 + 1e-10,
+          `LR ${lr} out of bounds at epoch ${i}`);
+      }
+    });
+
+    it('should complete a full cycle', () => {
+      const sched = cyclicLR(0.001, 0.1, 20);
+      // At start of cycle: base LR
+      assert.ok(sched(0) >= 0.001);
+      // At quarter cycle: going up
+      assert.ok(sched(5) > sched(0));
     });
   });
 
-  describe('CyclicLR', () => {
-    it('cycles between base and max', () => {
-      const s = new CyclicLR(0.001, 0.01, 100);
-      const lrs = [];
-      for (let i = 0; i < 400; i += 20) lrs.push(s.getLR(i));
-      // Should have at least one peak and one valley
-      const max = Math.max(...lrs);
-      const min = Math.min(...lrs);
-      assert.ok(max >= 0.005, `Max should be >= 0.005, got ${max}`);
-      assert.ok(min <= 0.005, `Min should be <= 0.005, got ${min}`);
+  describe('reduceLROnPlateau', () => {
+    it('should maintain LR when loss is improving', () => {
+      const plateau = reduceLROnPlateau(0.1, 0.5, 3);
+      assert.equal(plateau.getLR(), 0.1);
+      plateau.step(1.0);
+      plateau.step(0.9);
+      plateau.step(0.8);
+      assert.equal(plateau.getLR(), 0.1);
     });
-  });
 
-  describe('createScheduler', () => {
-    it('creates all types', () => {
-      assert.ok(createScheduler('constant', { lr: 0.01 }));
-      assert.ok(createScheduler('warmup', { lr: 0.01, warmupSteps: 100 }));
-      assert.ok(createScheduler('cosine', { lr: 0.01, totalEpochs: 100 }));
-      assert.ok(createScheduler('step', { lr: 0.01, factor: 0.1, stepSize: 30 }));
-      assert.ok(createScheduler('warmup_cosine', { lr: 0.01 }));
-      assert.ok(createScheduler('exponential', { lr: 0.01 }));
-      assert.ok(createScheduler('cyclic', { lr: 0.01 }));
+    it('should reduce LR after patience epochs of no improvement', () => {
+      const plateau = reduceLROnPlateau(0.1, 0.5, 3);
+      plateau.step(1.0); // best
+      plateau.step(1.0); // no improve
+      plateau.step(1.0); // no improve
+      plateau.step(1.0); // no improve — triggers reduction
+      assert.ok(Math.abs(plateau.getLR() - 0.05) < 1e-10, `LR: ${plateau.getLR()}`);
     });
-    it('throws on unknown', () => {
-      assert.throws(() => createScheduler('unknown'));
+
+    it('should reduce multiple times', () => {
+      const plateau = reduceLROnPlateau(0.1, 0.5, 2);
+      plateau.step(1.0);
+      plateau.step(1.0);
+      plateau.step(1.0); // reduce to 0.05
+      assert.ok(Math.abs(plateau.getLR() - 0.05) < 1e-10);
+      plateau.step(1.0);
+      plateau.step(1.0); // reduce to 0.025
+      assert.ok(Math.abs(plateau.getLR() - 0.025) < 1e-10);
     });
   });
 });
