@@ -8,6 +8,7 @@ import { generateDigitDataset, DIGIT_PATTERNS } from '../src/digits.js';
 import { trainTestSplit, normalize, oneHotEncode } from '../src/data.js';
 import { accuracy, classificationReport, confusionMatrix } from '../src/metrics.js';
 import { cosineAnnealingFn } from '../src/scheduler.js';
+import { TrainingHistory } from '../src/history.js';
 
 console.log('\n🧠 Neural Net Training Pipeline\n');
 
@@ -32,12 +33,12 @@ console.log(net.summary());
 // 3. Train
 console.log('\n🎯 Training...');
 const scheduler = cosineAnnealingFn(0.1, 100, 0.001);
-const losses = [];
+const history = new TrainingHistory();
 
 for (let epoch = 0; epoch < 100; epoch++) {
   const lr = scheduler(epoch);
   const loss = net.trainBatch(trainData.inputs, trainData.targets, lr);
-  losses.push(loss);
+  history.record(epoch, { loss, lr });
   
   if (epoch % 20 === 0 || epoch === 99) {
     console.log(`   Epoch ${String(epoch).padStart(3)}: loss=${loss.toFixed(4)} lr=${lr.toFixed(4)}`);
@@ -72,11 +73,12 @@ const json = net.save();
 console.log(`\n💾 Model saved: ${(json.length / 1024).toFixed(1)} KB`);
 
 // 7. Training summary
-const initialLoss = losses[0];
-const finalLoss = losses[losses.length - 1];
-console.log(`\n📊 Training Summary:`);
-console.log(`   Initial loss: ${initialLoss.toFixed(4)}`);
-console.log(`   Final loss:   ${finalLoss.toFixed(4)}`);
-console.log(`   Improvement:  ${((1 - finalLoss / initialLoss) * 100).toFixed(1)}%`);
+console.log('\n📊 Loss curve:');
+console.log(history.sparkline());
+const summary = history.summary();
+console.log(`\n   Initial loss: ${summary.initialLoss.toFixed(4)}`);
+console.log(`   Final loss:   ${summary.finalLoss.toFixed(4)}`);
+console.log(`   Best loss:    ${summary.bestLoss.toFixed(4)} (epoch ${summary.bestEpoch})`);
+console.log(`   Improvement:  ${summary.improvement}`);
 console.log(`   Test accuracy: ${(acc * 100).toFixed(1)}%`);
 console.log();
