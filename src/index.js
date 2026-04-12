@@ -30,6 +30,11 @@ export { MicroGPT, encodeText, decodeTokens, createSequences } from './microgpt.
 // Augmentation
 export { addNoise, randomFlipH, randomCrop, mixup, cutout, randomBrightnessContrast, compose } from './augmentation.js';
 
+// Data utilities
+export { shuffle, trainTestSplit, normalize, applyNormalization, minMaxScale, createBatches, oneHotEncode } from './data.js';
+export { addNoise as gaussianNoise } from './data.js';
+export { accuracy, confusionMatrix, classificationReport, macroF1, weightedF1, mse as mseMetric, mae, rmse, r2Score } from './metrics.js';
+
 // Training utilities
 export { EarlyStopping, LossHistory } from './callbacks.js';
 export { createScheduler, ConstantLR, LinearWarmup, CosineAnnealing, StepDecay, WarmupCosine, ExponentialDecay, CyclicLR, LinearDecay } from './scheduler.js';

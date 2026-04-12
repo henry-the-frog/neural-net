@@ -3,8 +3,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  stepDecay, exponentialDecay, cosineAnnealing,
-  warmup, warmupCosine, cyclicLR, reduceLROnPlateau
+  stepDecayFn as stepDecay, exponentialDecayFn as exponentialDecay, cosineAnnealingFn as cosineAnnealing,
+  warmupFn as warmup, warmupCosineFn as warmupCosine, cyclicLRFn as cyclicLR, reduceLROnPlateau
 } from '../src/scheduler.js';
 
 describe('Learning Rate Schedulers', () => {
