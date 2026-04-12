@@ -76,3 +76,20 @@ describe('TransformerEncoderBlock', () => {
     assert.ok(isFinite(loss), `Loss should be finite: ${loss}`);
   });
 });
+
+  it('should decrease loss with training', () => {
+    const net = new Network();
+    net.add(new TransformerEncoderBlock(4, 1, 8));
+    net.dense(8, 2, 'softmax').loss('cross_entropy');
+    
+    const input = Matrix.fromArray([[0.5, 0.3, 0.8, 0.1, 0.2, 0.7, 0.4, 0.6]]);
+    const target = Matrix.fromArray([[1, 0]]);
+    
+    const loss1 = net.trainBatch(input, target, 0.01);
+    let lastLoss = loss1;
+    for (let i = 0; i < 50; i++) {
+      lastLoss = net.trainBatch(input, target, 0.01);
+    }
+    
+    assert.ok(lastLoss < loss1, `Loss should decrease: ${loss1.toFixed(4)} → ${lastLoss.toFixed(4)}`);
+  });
