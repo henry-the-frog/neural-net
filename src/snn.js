@@ -292,14 +292,16 @@ export class IzhikevichNeuron {
 
     this.v += dv * dt;
     this.u += du * dt;
-    this.voltageHistory.push(this.v);
 
     if (this.v >= 30) {
       this.spiked = true;
+      this.voltageHistory.push(30); // Record spike peak, not overshoot
       this.v = this.c;
       this.u += this.d;
       return true;
     }
+
+    this.voltageHistory.push(this.v);
 
     return false;
   }
