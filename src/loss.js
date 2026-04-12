@@ -35,6 +35,6 @@ export const crossEntropy = {
 };
 
 export function getLoss(name) {
-  const losses = { mse, cross_entropy: crossEntropy };
+  const losses = { mse, cross_entropy: crossEntropy, crossEntropy, crossentropy: crossEntropy };
   return losses[name] || mse;
 }

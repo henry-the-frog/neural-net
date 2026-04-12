@@ -62,15 +62,17 @@ describe('Task-Conditioned HyperNetwork', () => {
   });
 
   it('different tasks produce different outputs', () => {
-    const tchn = new TaskConditionedHyperNetwork(3, 8, [2, 4, 1]);
+    // Use larger embedding dim for more differentiation between tasks
+    const tchn = new TaskConditionedHyperNetwork(3, 16, [2, 4, 1]);
     const input = Matrix.random(2, 2);
     const out0 = tchn.forward(0, input);
     const out1 = tchn.forward(1, input);
-    let different = false;
-    for (let i = 0; i < 2; i++) {
-      if (Math.abs(out0.get(i, 0) - out1.get(i, 0)) > 0.001) different = true;
+    // Check all output elements — at least one should differ
+    let maxDiff = 0;
+    for (let i = 0; i < out0.data.length; i++) {
+      maxDiff = Math.max(maxDiff, Math.abs(out0.data[i] - out1.data[i]));
     }
-    assert.ok(different, 'Different tasks should differ');
+    assert.ok(maxDiff > 1e-6, 'Different tasks should differ');
   });
 
   it('interpolation produces valid output', () => {

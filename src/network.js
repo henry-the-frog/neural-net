@@ -69,9 +69,16 @@ export class Network {
   }
 
   // Train on a batch
-  trainBatch(input, target, learningRate = 0.01, momentum = 0, optimizerName = 'sgd') {
+  // Set a default gradient clipping threshold for all training
+  clipGradients(maxNorm) {
+    this._clipGrad = maxNorm;
+  }
+
+  trainBatch(input, target, learningRate = 0.01, momentum = 0, optimizerName = 'sgd', options = {}) {
     if (Array.isArray(input)) input = Matrix.fromArray(input);
     if (Array.isArray(target)) target = Matrix.fromArray(target);
+
+    const clipGrad = options.clipGrad || this._clipGrad || 0;
 
     // Forward
     const output = this.forward(input);
@@ -83,6 +90,21 @@ export class Network {
     let grad = this.lossFunction.gradient(output, target);
     for (let i = this.layers.length - 1; i >= 0; i--) {
       grad = this.layers[i].backward(grad);
+    }
+
+    // Apply gradient clipping if requested
+    if (clipGrad > 0) {
+      for (const layer of this.layers) {
+        if (layer.dWeights) {
+          layer.dWeights = this._clipMatrix(layer.dWeights, clipGrad);
+        }
+        if (layer.dBiases) {
+          layer.dBiases = this._clipMatrix(layer.dBiases, clipGrad);
+        }
+        if (layer.dFilters) {
+          layer.dFilters = this._clipMatrix(layer.dFilters, clipGrad);
+        }
+      }
     }
 
     // Update weights — use optimizer object if available
@@ -107,6 +129,15 @@ export class Network {
     }
 
     return loss;
+  }
+
+  // Clip matrix values element-wise to [-maxNorm, maxNorm]
+  _clipMatrix(matrix, maxNorm) {
+    const clipped = new Float64Array(matrix.data.length);
+    for (let i = 0; i < matrix.data.length; i++) {
+      clipped[i] = Math.max(-maxNorm, Math.min(maxNorm, matrix.data[i]));
+    }
+    return new Matrix(matrix.rows, matrix.cols, clipped);
   }
 
   // Train for multiple epochs
@@ -375,32 +406,9 @@ export class Network {
     };
   }
 
-  // Serialize to JSON
-  toJSON() {
-    return {
-      layers: this.layers.map((l, i) => {
-        const obj = { type: l.constructor.name, index: i };
-        if (l.weights) obj.weights = l.weights.toArray();
-        if (l.biases) obj.biases = l.biases.toArray();
-        if (l.filters) obj.filters = l.filters.toArray();
-        // Store config
-        if (l.inputSize !== undefined) obj.inputSize = l.inputSize;
-        if (l.outputSize !== undefined) obj.outputSize = l.outputSize;
-        if (l.activation) obj.activation = l.activation.name;
-        if (l.inputH !== undefined) {
-          obj.inputH = l.inputH; obj.inputW = l.inputW; obj.inputC = l.inputC;
-          obj.numFilters = l.numFilters; obj.filterSize = l.filterSize;
-          obj.stride = l.stride; obj.padding = l.padding;
-        }
-        if (l.poolSize !== undefined) {
-          obj.inputH = l.inputH; obj.inputW = l.inputW; obj.inputC = l.inputC;
-          obj.poolSize = l.poolSize;
-        }
-        return obj;
-      }),
-      loss: this.lossFunction ? 'mse' : null
-    };
-  }
+  // Serialize to JSON (legacy — delegates to v2 toJSON below)
+  // Note: the v2 toJSON method defined later in this class is the canonical one.
+  // fromJSON handles both formats for backward compatibility.
 
   // Deserialize from JSON
   static fromJSON(jsonStr) {
@@ -410,11 +418,19 @@ export class Network {
     for (const layerData of data.layers) {
       if (layerData.type === 'Dense') {
         const layer = new Dense(layerData.inputSize, layerData.outputSize, layerData.activation);
-        if (layerData.weights) layer.weights = Matrix.fromArray(layerData.weights);
-        if (layerData.biases) {
-          const b = Matrix.fromArray(layerData.biases);
-          // Ensure biases are row vector [1, outputSize]
-          layer.biases = b.rows === 1 ? b : new Matrix(1, b.rows).map((_, i, j) => b.get(j, 0));
+        if (layerData.weightShape) {
+          // v2 format: flat array + shape
+          layer.weights = new Matrix(layerData.weightShape[0], layerData.weightShape[1],
+            new Float64Array(layerData.weights));
+          layer.biases = new Matrix(layerData.biasShape[0], layerData.biasShape[1],
+            new Float64Array(layerData.biases));
+        } else if (layerData.weights) {
+          // v1 format: 2D arrays
+          layer.weights = Matrix.fromArray(layerData.weights);
+          if (layerData.biases) {
+            const b = Matrix.fromArray(layerData.biases);
+            layer.biases = b.rows === 1 ? b : new Matrix(1, b.rows).map((_, i, j) => b.get(j, 0));
+          }
         }
         net.layers.push(layer);
       }
