@@ -447,4 +447,108 @@ export class Network {
     lines.push(`Total parameters: ${totalParams}`);
     return lines.join('\n');
   }
+
+  // Serialize network to JSON-compatible object
+  toJSON() {
+    const layers = this.layers.map(layer => {
+      const info = {
+        type: layer.constructor.name,
+      };
+
+      if (layer instanceof Dense) {
+        info.inputSize = layer.inputSize;
+        info.outputSize = layer.outputSize;
+        info.activation = layer.activation.name;
+        info.weights = Array.from(layer.weights.data);
+        info.weightShape = [layer.weights.rows, layer.weights.cols];
+        info.biases = Array.from(layer.biases.data);
+        info.biasShape = [layer.biases.rows, layer.biases.cols];
+      } else if (layer.constructor.name === 'Conv2D') {
+        info.inputH = layer.inputH;
+        info.inputW = layer.inputW;
+        info.channels = layer.channels;
+        info.numFilters = layer.numFilters;
+        info.filterSize = layer.filterSize;
+        info.activation = layer.activationName || 'linear';
+        info.stride = layer.stride;
+        info.padding = layer.padding;
+        info.filters = Array.from(layer.filters.data);
+        info.filterShape = [layer.filters.rows, layer.filters.cols];
+        info.biases = Array.from(layer.biases.data);
+        info.biasShape = [layer.biases.rows, layer.biases.cols];
+      } else if (layer.constructor.name === 'BatchNorm') {
+        info.size = layer.size;
+        info.gamma = Array.from(layer.gamma.data);
+        info.beta = Array.from(layer.beta.data);
+        info.runningMean = Array.from(layer.runningMean.data);
+        info.runningVar = Array.from(layer.runningVar.data);
+      } else if (layer.constructor.name === 'RNN') {
+        info.inputSize = layer.inputSize;
+        info.hiddenSize = layer.hiddenSize;
+        info.Wih = Array.from(layer.Wih.data);
+        info.Whh = Array.from(layer.Whh.data);
+        info.bh = Array.from(layer.bh.data);
+      } else if (layer.constructor.name === 'LSTM') {
+        info.inputSize = layer.inputSize;
+        info.hiddenSize = layer.hiddenSize;
+        info.Wi = Array.from(layer.Wi.data);
+        info.Wf = Array.from(layer.Wf.data);
+        info.Wc = Array.from(layer.Wc.data);
+        info.Wo = Array.from(layer.Wo.data);
+        info.bi = Array.from(layer.bi.data);
+        info.bf = Array.from(layer.bf.data);
+        info.bc = Array.from(layer.bc.data);
+        info.bo = Array.from(layer.bo.data);
+      } else if (layer.constructor.name === 'Flatten' || layer.constructor.name === 'MaxPool2D') {
+        // These are stateless — just need constructor args
+        if (layer.inputH) info.inputH = layer.inputH;
+        if (layer.inputW) info.inputW = layer.inputW;
+        if (layer.channels) info.channels = layer.channels;
+        if (layer.poolSize) info.poolSize = layer.poolSize;
+      }
+
+      return info;
+    });
+
+    return {
+      version: 1,
+      loss: this.lossFunction?.name || null,
+      optimizer: this._optimizerName,
+      layers,
+    };
+  }
+
+  // Serialize to JSON string
+  save() {
+    return JSON.stringify(this.toJSON());
+  }
+
+  // Load network from JSON string or object
+  static load(jsonOrString) {
+    const data = typeof jsonOrString === 'string' ? JSON.parse(jsonOrString) : jsonOrString;
+    const net = new Network();
+
+    // We need to import layer constructors dynamically
+    // Since they're already imported at the top, use a registry
+    for (const layerInfo of data.layers) {
+      switch (layerInfo.type) {
+        case 'Dense': {
+          const layer = new Dense(layerInfo.inputSize, layerInfo.outputSize, layerInfo.activation);
+          layer.weights = new Matrix(layerInfo.weightShape[0], layerInfo.weightShape[1],
+            new Float64Array(layerInfo.weights));
+          layer.biases = new Matrix(layerInfo.biasShape[0], layerInfo.biasShape[1],
+            new Float64Array(layerInfo.biases));
+          net.add(layer);
+          break;
+        }
+        // For other layer types, we'd need their imports here
+        // For now, Dense-only loading is the most common case
+        default:
+          throw new Error(`Cannot load layer type: ${layerInfo.type}. Only Dense layers supported for load.`);
+      }
+    }
+
+    if (data.loss) net.loss(data.loss);
+    return net;
+  }
 }
