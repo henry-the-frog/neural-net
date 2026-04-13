@@ -14,9 +14,54 @@ import { mse, crossEntropy, getLoss } from './loss.js';
 import { Network } from './network.js';
 import { Dense } from './layer.js';
 
-export const activations = { sigmoid, tanh, relu, leakyRelu, softmax, linear };
+// Compatibility: wrap activations to accept scalar or array arguments
+function wrapActivation(act) {
+  const wrapped = { ...act };
+  const origForward = wrapped.forward;
+  if (origForward) {
+    wrapped.forward = (x) => {
+      if (typeof x === 'number') {
+        const result = origForward([x]);
+        return Array.isArray(result) ? result[0] : result;
+      }
+      return origForward(x);
+    };
+  }
+  const origBackward = wrapped.backward;
+  if (origBackward) {
+    wrapped.backward = (x) => {
+      if (typeof x === 'number') {
+        const result = origBackward([x]);
+        return Array.isArray(result) ? result[0] : result;
+      }
+      return origBackward(x);
+    };
+  }
+  return wrapped;
+}
+
+export const activations = {
+  sigmoid: wrapActivation(sigmoid),
+  tanh: wrapActivation(tanh),
+  relu: wrapActivation(relu),
+  leakyRelu: wrapActivation(leakyRelu),
+  softmax,
+  linear: wrapActivation(linear)
+};
 export const losses = { mse, crossEntropy };
-export function createNetwork(config) { return new Network(config); }
+export function createNetwork(config) {
+  if (config.layers && config.layers.length > 0 && typeof config.layers[0] === 'object' && config.layers[0].size) {
+    // Config-style layers: convert to actual layer objects
+    const layers = [];
+    for (let i = 1; i < config.layers.length; i++) {
+      const layer = config.layers[i];
+      const inputSize = config.layers[i-1].size;
+      layers.push(new Dense(inputSize, layer.size, layer.activation || 'sigmoid'));
+    }
+    return new Network(layers);
+  }
+  return new Network(config);
+}
 
 // Layers
 export { Dense, Dense as DenseLayer } from './layer.js';
