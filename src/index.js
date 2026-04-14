@@ -49,7 +49,18 @@ export const activations = {
   linear: wrapActivation(linear)
 };
 export const losses = { mse, crossEntropy };
-export function createNetwork(config) {
+export function createNetwork(config, defaultActivation) {
+  // Support createNetwork([2, 4, 1], 'sigmoid') — array of sizes + optional activation
+  if (Array.isArray(config) && config.length > 0 && typeof config[0] === 'number') {
+    const layers = [];
+    const act = defaultActivation || 'sigmoid';
+    for (let i = 1; i < config.length; i++) {
+      layers.push(new Dense(config[i-1], config[i], act));
+    }
+    const net = new Network(layers);
+    net.loss('mse');
+    return net;
+  }
   if (config.layers && config.layers.length > 0 && typeof config.layers[0] === 'object' && config.layers[0].size) {
     // Config-style layers: convert to actual layer objects
     const layers = [];
@@ -81,8 +92,8 @@ export { ModelZoo } from './model-zoo.js';
 export { Autoencoder } from './autoencoder.js';
 export { VAE } from './vae.js';
 export { GAN } from './gan.js';
-export { MicroGPT, createSequences, decodeTokens } from './microgpt.js';
-export { PositionalEncoding } from './transformer.js';
+export { MicroGPT, createSequences, decodeTokens, encodeText } from './microgpt.js';
+export { PositionalEncoding, TransformerEncoderBlock } from './transformer.js';
 
 // Data & Preprocessing
 export { Datasets } from './datasets.js';

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Matrix, NeuralNetwork, createNetwork, activations, losses, DenseLayer } from '../src/index.js';
+import { Matrix, createNetwork, activations, losses, DenseLayer } from '../src/index.js';
 
 // ===== Matrix tests =====
 describe('Matrix — basics', () => {
@@ -82,13 +82,13 @@ describe('Activations', () => {
 describe('Losses', () => {
   it('MSE of identical = 0', () => {
     const a = Matrix.fromArray([[1, 0]]);
-    assert.ok(losses.mse.forward(a, a) < 1e-10);
+    assert.ok(losses.mse.compute(a, a) < 1e-10);
   });
 
   it('MSE increases with difference', () => {
     const a = Matrix.fromArray([[1, 0]]);
     const b = Matrix.fromArray([[0, 1]]);
-    assert.ok(losses.mse.forward(a, b) > 0);
+    assert.ok(losses.mse.compute(a, b) > 0);
   });
 });
 
@@ -104,7 +104,7 @@ describe('NeuralNetwork — XOR', () => {
       [0], [1], [1], [0],
     ]);
     
-    const history = net.train(inputs, targets, { epochs: 5000, learningRate: 1.0 });
+    const history = net.train({ inputs, targets }, { epochs: 5000, learningRate: 1.0 });
     
     // Loss should decrease
     assert.ok(history[history.length - 1] < history[0], 'Loss should decrease');
@@ -124,7 +124,7 @@ describe('NeuralNetwork — AND gate', () => {
     const inputs = Matrix.fromArray([[0,0],[0,1],[1,0],[1,1]]);
     const targets = Matrix.fromArray([[0],[0],[0],[1]]);
     
-    net.train(inputs, targets, { epochs: 2000, learningRate: 1.0 });
+    net.train({ inputs, targets }, { epochs: 2000, learningRate: 1.0 });
     
     const pred = net.predict(inputs);
     assert.ok(pred.get(0, 0) < 0.3);
@@ -138,7 +138,7 @@ describe('NeuralNetwork — OR gate', () => {
     const inputs = Matrix.fromArray([[0,0],[0,1],[1,0],[1,1]]);
     const targets = Matrix.fromArray([[0],[1],[1],[1]]);
     
-    net.train(inputs, targets, { epochs: 2000, learningRate: 1.0 });
+    net.train({ inputs, targets }, { epochs: 2000, learningRate: 1.0 });
     
     const pred = net.predict(inputs);
     assert.ok(pred.get(0, 0) < 0.3);
@@ -148,8 +148,7 @@ describe('NeuralNetwork — OR gate', () => {
 
 describe('NeuralNetwork — forward pass', () => {
   it('single layer output shape', () => {
-    const net = new NeuralNetwork();
-    net.addLayer(3, 2, 'sigmoid');
+    const net = createNetwork([3, 2], 'sigmoid');
     const input = Matrix.fromArray([[1, 2, 3]]);
     const output = net.forward(input);
     assert.equal(output.rows, 1);
@@ -171,7 +170,7 @@ describe('NeuralNetwork — training', () => {
     const inputs = Matrix.fromArray([[0,0],[0,1],[1,0],[1,1]]);
     const targets = Matrix.fromArray([[0],[1],[1],[0]]);
     
-    const history = net.train(inputs, targets, { epochs: 100, learningRate: 0.5 });
+    const history = net.train({ inputs, targets }, { epochs: 100, learningRate: 0.5 });
     // First loss should be > last loss (usually)
     assert.ok(history.length === 100);
   });
@@ -180,7 +179,7 @@ describe('NeuralNetwork — training', () => {
     const net = createNetwork([2, 3, 1]);
     const inputs = Matrix.fromArray([[0,0],[0,1],[1,0],[1,1]]);
     const targets = Matrix.fromArray([[0],[1],[1],[1]]);
-    net.train(inputs, targets, { epochs: 50, learningRate: 0.5 });
+    net.train({ inputs, targets }, { epochs: 50, learningRate: 0.5 });
     // Should not throw
   });
 });
