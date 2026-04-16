@@ -1,6 +1,6 @@
 # neural-net
 
-A comprehensive neural network library built from scratch in JavaScript. No dependencies. 72 source modules, 90+ test files, 1200+ tests.
+A comprehensive neural network library built from scratch in JavaScript. No dependencies. 71 source modules, 100 test files, 1230+ tests, ~15,600 lines of code.
 
 ## Quick Start
 
