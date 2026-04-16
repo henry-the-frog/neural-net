@@ -51,6 +51,7 @@ export class SelfAttention {
     // Process all positions at once per sample
     
     const allQ = [], allK = [], allV = [], allAttn = [], allCtx = [];
+    const allSeqs = []; // Cache original sequences for backward
     
     for (let b = 0; b < batchSize; b++) {
       // Extract sequence for this batch item: [seqLen, dModel]
@@ -60,6 +61,7 @@ export class SelfAttention {
           seq.set(t, d, input.get(b, t * this.dModel + d));
         }
       }
+      allSeqs.push(seq);
       
       // Linear projections: Q, K, V each [seqLen, dModel]
       const Q = seq.dot(this.Wq).add(this.bq);
@@ -75,21 +77,11 @@ export class SelfAttention {
       // Context: attn · V → [seqLen, dModel]
       const context = attnWeights.dot(V);
       
-      // Output projection
-      const output = context.dot(this.Wo).add(this.bo);
-      
       allQ.push(Q); allK.push(K); allV.push(V);
       allAttn.push(attnWeights); allCtx.push(context);
-      
-      // Write output back to flat format
-      for (let t = 0; t < seqLen; t++) {
-        for (let d = 0; d < this.dModel; d++) {
-          input.set(b, t * this.dModel + d, output.get(t, d));
-        }
-      }
     }
     
-    this._cache = { input, batchSize, seqLen, allQ, allK, allV, allAttn, allCtx };
+    this._cache = { allSeqs, batchSize, seqLen, allQ, allK, allV, allAttn, allCtx };
     
     // Build output matrix
     const result = new Matrix(batchSize, seqLen * this.dModel);
@@ -106,7 +98,7 @@ export class SelfAttention {
   }
   
   backward(dOutput) {
-    const { batchSize, seqLen, allQ, allK, allV, allAttn, allCtx } = this._cache;
+    const { batchSize, seqLen, allSeqs, allQ, allK, allV, allAttn, allCtx } = this._cache;
     
     // Initialize gradient accumulators
     let dWq = Matrix.zeros(this.dModel, this.dModel);
@@ -145,13 +137,8 @@ export class SelfAttention {
       const dQ = dScores.dot(allK[b]);          // [seqLen, dModel]
       const dK = dScores.T().dot(allQ[b]);      // [seqLen, dModel]
       
-      // Extract sequence for this batch
-      const seq = new Matrix(seqLen, this.dModel);
-      for (let t = 0; t < seqLen; t++) {
-        for (let d = 0; d < this.dModel; d++) {
-          seq.set(t, d, this._cache.input.get(b, t * this.dModel + d));
-        }
-      }
+      // Use cached original sequence for this batch
+      const seq = allSeqs[b];
       
       // Accumulate weight gradients
       dWq = dWq.add(seq.T().dot(dQ));
