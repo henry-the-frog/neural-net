@@ -197,4 +197,31 @@ describe('Systematic Gradient Check — All Modules', () => {
     const { maxErr, passed, worstIdx } = checkLayerGradients(layer, input);
     assert.ok(passed, `Conv1D gradient error: ${maxErr.toExponential(2)} at ${worstIdx}`);
   });
+
+  // RNN
+  it('RNN', async () => {
+    const { RNN } = await import('../src/rnn.js');
+    const layer = new RNN(2, 3, 2); // inputSize=2, hiddenSize=3, seqLen=2
+    const input = Matrix.random(1, 4); // batch=1, seqLen*inputSize = 2*2 = 4
+    const { maxErr, passed, worstIdx } = checkLayerGradients(layer, input, { tolerance: 0.05 });
+    assert.ok(passed, `RNN gradient error: ${maxErr.toExponential(2)} at ${worstIdx}`);
+  });
+
+  // LSTM
+  it('LSTM', async () => {
+    const { LSTM } = await import('../src/rnn.js');
+    const layer = new LSTM(2, 3, 2); // inputSize=2, hiddenSize=3, seqLen=2
+    const input = Matrix.random(1, 4);
+    const { maxErr, passed, worstIdx } = checkLayerGradients(layer, input, { tolerance: 0.05 });
+    assert.ok(passed, `LSTM gradient error: ${maxErr.toExponential(2)} at ${worstIdx}`);
+  });
+
+  // GRU
+  it('GRU', async () => {
+    const { GRU } = await import('../src/rnn.js');
+    const layer = new GRU(2, 3, 2);
+    const input = Matrix.random(1, 4);
+    const { maxErr, passed, worstIdx } = checkLayerGradients(layer, input, { tolerance: 0.05 });
+    assert.ok(passed, `GRU gradient error: ${maxErr.toExponential(2)} at ${worstIdx}`);
+  });
 });
