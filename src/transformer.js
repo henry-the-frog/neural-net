@@ -239,16 +239,17 @@ export class TransformerEncoderBlock {
   }
   
   backward(dOutput) {
-    // Backward through layer norm 2
-    const dNorm2 = this.norm2.backward(dOutput);
+    // Backward through layer norm 2: dResidual2 = norm2.backward(dOutput)
+    const dResidual2 = this.norm2.backward(dOutput);
     
-    // Residual: gradient flows to both FF path and skip connection
-    const batchSize = dNorm2.rows;
-    const seqLen = Math.floor(dNorm2.cols / this.dModel);
+    const batchSize = dResidual2.rows;
+    const seqLen = Math.floor(dResidual2.cols / this.dModel);
     
-    // Backward through feed-forward layers (position-wise)
-    // Need to accumulate gradients across all positions
-    // First, gather all position vectors into a single batch for FF layers
+    // Residual 2: residual2 = normed1 + ffOut
+    // dNormed1_skip = dResidual2 (skip connection)
+    // dNormed1_ff = backward through FF (FF path)
+    
+    // Backward through FF layers
     const allPositions = new Matrix(batchSize * seqLen, this.dModel);
     const allDPositions = new Matrix(batchSize * seqLen, this.dModel);
     for (let b = 0; b < batchSize; b++) {
@@ -256,22 +257,39 @@ export class TransformerEncoderBlock {
         const row = b * seqLen + t;
         for (let d = 0; d < this.dModel; d++) {
           allPositions.set(row, d, this._ffInput.get(b, t * this.dModel + d));
-          allDPositions.set(row, d, dNorm2.get(b, t * this.dModel + d));
+          allDPositions.set(row, d, dResidual2.get(b, t * this.dModel + d));
         }
       }
     }
     
-    // Forward all positions as a batch, then backward as a batch
-    // This correctly accumulates gradients across all positions
     const ff1Out = this.ff1.forward(allPositions);
     this.ff2.forward(ff1Out);
     const dFF2 = this.ff2.backward(allDPositions);
-    this.ff1.backward(dFF2);
+    const dFF1 = this.ff1.backward(dFF2);
     
-    // Continue backward through norm1 and attention
-    const dNorm1 = this.norm1.backward(dNorm2);
-    const dAttn = this.attention.backward(dNorm1);
-    return addMatrices(dAttn, dNorm1); // Residual gradient
+    // Scatter FF input gradient back to [batchSize, seqLen * dModel]
+    const dNormed1_ff = new Matrix(batchSize, dResidual2.cols);
+    for (let b = 0; b < batchSize; b++) {
+      for (let t = 0; t < seqLen; t++) {
+        for (let d = 0; d < this.dModel; d++) {
+          dNormed1_ff.set(b, t * this.dModel + d, dFF1.get(b * seqLen + t, d));
+        }
+      }
+    }
+    
+    // Combined gradient to normed1: skip + FF path
+    const dNormed1 = addMatrices(dResidual2, dNormed1_ff);
+    
+    // Backward through layer norm 1
+    const dResidual1 = this.norm1.backward(dNormed1);
+    
+    // Residual 1: residual1 = x + attn(x)
+    // dX_skip = dResidual1 (skip connection)  
+    // dX_attn = attention.backward(dResidual1) (attention path)
+    const dAttn = this.attention.backward(dResidual1);
+    
+    // Combined gradient to input: skip + attention path
+    return addMatrices(dResidual1, dAttn);
   }
   
   update(learningRate) {
