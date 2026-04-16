@@ -13,6 +13,39 @@ export function squash(vector) {
   return vector.map(v => v * scale);
 }
 
+// Gradient of squash(s) w.r.t. s, applied to upstream gradient dv
+// Returns ds = J_squash^T · dv
+export function squashBackward(s, dv) {
+  const normSq = s.reduce((sum, v) => sum + v * v, 0);
+  const norm = Math.sqrt(normSq + 1e-8);
+  const normCubed = norm * norm * norm;
+  const denom = 1 + normSq;
+  const denomSq = denom * denom;
+  
+  // d(squash)/ds_k = (normSq/(denom*norm)) * (delta_ij - s_i*s_j/normSq) + (2*s_k*s_i)/(denom^2*norm) - (normSq*s_k*s_i)/(denom*normCubed)
+  // Simplified: use the Jacobian-vector product directly
+  // Let f = normSq / (denom * norm), then squash = f * s
+  // df/ds_k = 2*s_k / (denom*norm) - normSq*s_k / (denom*normCubed) - 2*normSq*s_k / (denomSq*norm)
+  
+  const f = normSq / (denom * norm);
+  const ds = new Array(s.length);
+  
+  // df_k = ds_k factor from chain rule
+  // d(f*s_i)/ds_k = f*delta_ik + s_i * df/ds_k
+  // So (J*dv)_k = f*dv_k + sum_i(s_i * dv_i) * df/ds_k
+  
+  const sdotdv = s.reduce((sum, si, i) => sum + si * dv[i], 0);
+  
+  for (let k = 0; k < s.length; k++) {
+    const dfk = 2 * s[k] / (denom * norm) 
+              - normSq * s[k] / (denom * normCubed) 
+              - 2 * normSq * s[k] / (denomSq * norm);
+    ds[k] = f * dv[k] + sdotdv * dfk;
+  }
+  
+  return ds;
+}
+
 // Vector length (capsule "probability")
 export function vectorNorm(vector) {
   return Math.sqrt(vector.reduce((s, v) => s + v * v, 0));
@@ -98,6 +131,7 @@ export class CapsuleLayer {
       }
 
       // Squash: v[j] = squash(s[j])
+      this._preSquash = s; // Cache for backward
       output = s.map(sj => squash(sj));
 
       // Update routing logits (except last iteration)
@@ -119,16 +153,13 @@ export class CapsuleLayer {
     return output;
   }
 
-  // Backward pass (simplified)
+  // Backward pass
   backward(dOutput) {
     // dOutput: [numCapsules][capsuleDim] gradients
 
-    // Gradient through squash (approximate)
+    // Gradient through squash using proper Jacobian
     const dS = dOutput.map((dv, j) => {
-      const v = this.output[j];
-      const normSq = v.reduce((s, x) => s + x * x, 0);
-      // Jacobian of squash is complex; use approximate: dS ≈ dV for small changes
-      return dv;
+      return squashBackward(this._preSquash[j], dv);
     });
 
     // Gradient for transformation weights
