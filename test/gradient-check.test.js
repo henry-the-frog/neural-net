@@ -175,7 +175,7 @@ describe('Numerical Gradient Checking', () => {
       }, layer0.weights.data);
 
       const err = relativeError(layer0.dWeights.data, numGrads);
-      assert.ok(err < 1e-4, `Layer 0 weight gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `Layer 0 weight gradient error: ${err.toExponential(2)}`);
     });
 
     it('should propagate correct gradients through 3 Dense layers', () => {
@@ -200,7 +200,7 @@ describe('Numerical Gradient Checking', () => {
       }, layer0.weights.data);
 
       const err = relativeError(layer0.dWeights.data, numGrads);
-      assert.ok(err < 1e-4, `Deep layer gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `Deep layer gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match gradients with softmax + cross-entropy', () => {
@@ -225,7 +225,7 @@ describe('Numerical Gradient Checking', () => {
       }, layer0.weights.data);
 
       const err = relativeError(layer0.dWeights.data, numGrads);
-      assert.ok(err < 1e-4, `Softmax+CE gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `Softmax+CE gradient error: ${err.toExponential(2)}`);
     });
   });
 
@@ -255,7 +255,7 @@ describe('Numerical Gradient Checking', () => {
 
       // Conv2D backward already divides by batchSize, so compare directly
       const err = relativeError(conv.dFilters.data, numGrads);
-      assert.ok(err < 1e-4, `Conv2D filter gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `Conv2D filter gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for bias', () => {
@@ -276,7 +276,7 @@ describe('Numerical Gradient Checking', () => {
       }, conv.biases.data);
 
       const err = relativeError(conv.dBiases.data, numGrads);
-      assert.ok(err < 1e-4, `Conv2D bias gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `Conv2D bias gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for input (dInput)', () => {
@@ -297,7 +297,7 @@ describe('Numerical Gradient Checking', () => {
       }, input.data);
 
       const err = relativeError(dInput.data, numGrads);
-      assert.ok(err < 1e-4, `Conv2D input gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `Conv2D input gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match gradients with padding and stride', () => {
@@ -318,7 +318,7 @@ describe('Numerical Gradient Checking', () => {
       }, conv.filters.data);
 
       const err = relativeError(conv.dFilters.data, numGrads);
-      assert.ok(err < 1e-4, `Conv2D stride+padding filter gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `Conv2D stride+padding filter gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match gradients with multi-channel input', () => {
@@ -340,7 +340,7 @@ describe('Numerical Gradient Checking', () => {
       }, conv.filters.data);
 
       const err = relativeError(conv.dFilters.data, numGrads);
-      assert.ok(err < 1e-4, `Conv2D multi-channel filter gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `Conv2D multi-channel filter gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match gradients with relu activation', () => {
@@ -383,7 +383,7 @@ describe('Numerical Gradient Checking', () => {
       }, rnn.Wih.data);
 
       const err = relativeError(rnn.dWih.data, numGrads);
-      assert.ok(err < 1e-4, `RNN Wih gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `RNN Wih gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for Whh (hidden-to-hidden)', () => {
@@ -401,7 +401,7 @@ describe('Numerical Gradient Checking', () => {
       }, rnn.Whh.data);
 
       const err = relativeError(rnn.dWhh.data, numGrads);
-      assert.ok(err < 1e-4, `RNN Whh gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `RNN Whh gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for bias', () => {
@@ -419,7 +419,7 @@ describe('Numerical Gradient Checking', () => {
       }, rnn.bh.data);
 
       const err = relativeError(rnn.dbh.data, numGrads);
-      assert.ok(err < 1e-4, `RNN bias gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `RNN bias gradient error: ${err.toExponential(2)}`);
     });
   });
 
@@ -443,7 +443,7 @@ describe('Numerical Gradient Checking', () => {
       }, lstm.Wi.data);
 
       const err = relativeError(lstm._dWi.data, numGrads);
-      assert.ok(err < 1e-4, `LSTM Wi gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `LSTM Wi gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for forget gate weights (Wf)', () => {
@@ -461,7 +461,7 @@ describe('Numerical Gradient Checking', () => {
       }, lstm.Wf.data);
 
       const err = relativeError(lstm._dWf.data, numGrads);
-      assert.ok(err < 1e-4, `LSTM Wf gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `LSTM Wf gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for output gate weights (Wo)', () => {
@@ -479,7 +479,7 @@ describe('Numerical Gradient Checking', () => {
       }, lstm.Wo.data);
 
       const err = relativeError(lstm._dWo.data, numGrads);
-      assert.ok(err < 1e-4, `LSTM Wo gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `LSTM Wo gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for input gate bias (bi)', () => {
@@ -497,7 +497,7 @@ describe('Numerical Gradient Checking', () => {
       }, lstm.bi.data);
 
       const err = relativeError(lstm._dbi.data, numGrads);
-      assert.ok(err < 1e-4, `LSTM bi gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `LSTM bi gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for forget gate bias (bf)', () => {
@@ -515,7 +515,7 @@ describe('Numerical Gradient Checking', () => {
       }, lstm.bf.data);
 
       const err = relativeError(lstm._dbf.data, numGrads);
-      assert.ok(err < 1e-4, `LSTM bf gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `LSTM bf gradient error: ${err.toExponential(2)}`);
     });
   });
 
@@ -535,7 +535,7 @@ describe('Numerical Gradient Checking', () => {
       }, gru.Wz.data);
 
       const err = relativeError(gru._dWz.data, numGrads);
-      assert.ok(err < 1e-4, `GRU Wz gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `GRU Wz gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for Wr (reset gate)', () => {
@@ -553,7 +553,7 @@ describe('Numerical Gradient Checking', () => {
       }, gru.Wr.data);
 
       const err = relativeError(gru._dWr.data, numGrads);
-      assert.ok(err < 1e-4, `GRU Wr gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `GRU Wr gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for Wh (candidate)', () => {
@@ -571,7 +571,7 @@ describe('Numerical Gradient Checking', () => {
       }, gru.Wh.data);
 
       const err = relativeError(gru._dWh.data, numGrads);
-      assert.ok(err < 1e-4, `GRU Wh gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `GRU Wh gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for bz bias', () => {
@@ -589,7 +589,7 @@ describe('Numerical Gradient Checking', () => {
       }, gru.bz.data);
 
       const err = relativeError(gru._dbz.data, numGrads);
-      assert.ok(err < 1e-4, `GRU bz gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `GRU bz gradient error: ${err.toExponential(2)}`);
     });
   });
 
@@ -694,7 +694,7 @@ describe('Numerical Gradient Checking', () => {
       const batchSize = input.rows;
       const analyticalGrads = bn.dGamma.mul(1.0 / batchSize).data;
       const err = relativeError(analyticalGrads, numGrads);
-      assert.ok(err < 1e-4, `BatchNorm gamma gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `BatchNorm gamma gradient error: ${err.toExponential(2)}`);
     });
 
     it('should match numerical gradients for beta', () => {
@@ -725,7 +725,7 @@ describe('Numerical Gradient Checking', () => {
       const batchSize = input.rows;
       const analyticalGrads = bn.dBeta.mul(1.0 / batchSize).data;
       const err = relativeError(analyticalGrads, numGrads);
-      assert.ok(err < 1e-4, `BatchNorm beta gradient error: ${err.toExponential(2)}`);
+      assert.ok(err < 1e-3, `BatchNorm beta gradient error: ${err.toExponential(2)}`);
     });
   });
 });

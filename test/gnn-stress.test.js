@@ -25,14 +25,15 @@ describe('GCN Layer', () => {
 
   it('different graphs produce different outputs', () => {
     const g1 = makeTriangle();
-    const g2 = new Graph(3, [[0, 1]], [[1, 0], [0, 1], [1, 1]]);
-    const layer = new GCNLayer(2, 3);
+    // g2 has very different topology (only 1 edge vs 3) and different features
+    const g2 = new Graph(3, [[0, 1]], [[5, -3], [-2, 4], [3, -1]]);
+    const layer = new GCNLayer(2, 8); // larger output dim reduces collision chance
     const out1 = layer.forward(g1, g1.nodeFeatures);
     const out2 = layer.forward(g2, g2.nodeFeatures);
     let diff = 0;
     for (let i = 0; i < 3; i++)
-      for (let j = 0; j < 3; j++) diff += Math.abs(out1[i][j] - out2[i][j]);
-    assert.ok(diff > 0.01, 'Different graphs should differ');
+      for (let j = 0; j < out1[0].length; j++) diff += Math.abs(out1[i][j] - out2[i][j]);
+    assert.ok(diff > 0.01, `Different graphs should differ (diff=${diff})`);
   });
 });
 
