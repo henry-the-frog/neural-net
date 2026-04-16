@@ -207,23 +207,30 @@ export class TransformerEncoderBlock {
     const residual1 = addMatrices(input, attnOut);
     const normed1 = this.norm1.forward(residual1);
     
-    // Feedforward per position + residual
+    // Feedforward: batch all positions together for proper gradient computation
     this._ffInput = normed1;
-    const ffOut = new Matrix(batchSize, input.cols);
     
+    // Gather all positions into a single batch: [batchSize * seqLen, dModel]
+    const allPositions = new Matrix(batchSize * seqLen, this.dModel);
     for (let b = 0; b < batchSize; b++) {
       for (let t = 0; t < seqLen; t++) {
-        // Extract position vector: [1, dModel]
-        const posVec = new Matrix(1, this.dModel);
-        for (let d = 0; d < this.dModel; d++)
-          posVec.set(0, d, normed1.get(b, t * this.dModel + d));
-        
-        // FF1 → ReLU → FF2
-        const ff1Out = this.ff1.forward(posVec);
-        const ff2Out = this.ff2.forward(ff1Out);
-        
-        for (let d = 0; d < this.dModel; d++)
-          ffOut.set(b, t * this.dModel + d, ff2Out.get(0, d));
+        for (let d = 0; d < this.dModel; d++) {
+          allPositions.set(b * seqLen + t, d, normed1.get(b, t * this.dModel + d));
+        }
+      }
+    }
+    
+    // FF1 → ReLU → FF2 on all positions at once
+    const ff1Out = this.ff1.forward(allPositions);
+    const ff2Out = this.ff2.forward(ff1Out);
+    
+    // Scatter back to [batchSize, seqLen * dModel]
+    const ffOut = new Matrix(batchSize, input.cols);
+    for (let b = 0; b < batchSize; b++) {
+      for (let t = 0; t < seqLen; t++) {
+        for (let d = 0; d < this.dModel; d++) {
+          ffOut.set(b, t * this.dModel + d, ff2Out.get(b * seqLen + t, d));
+        }
       }
     }
     
@@ -236,26 +243,30 @@ export class TransformerEncoderBlock {
     const dNorm2 = this.norm2.backward(dOutput);
     
     // Residual: gradient flows to both FF path and skip connection
-    // dNorm2 goes to both ff path and normed1
+    const batchSize = dNorm2.rows;
+    const seqLen = Math.floor(dNorm2.cols / this.dModel);
     
     // Backward through feed-forward layers (position-wise)
-    // We need to propagate through ff2 → ff1 for each position
-    // But since ff1/ff2 store the last forward's state,
-    // we do a simplified backward that at least sets their gradients
-    const batchSize = dNorm2.rows;
-    const seqLen = dNorm2.cols / this.dModel;
-    
-    // Backward through ff2 then ff1 for each position
+    // Need to accumulate gradients across all positions
+    // First, gather all position vectors into a single batch for FF layers
+    const allPositions = new Matrix(batchSize * seqLen, this.dModel);
+    const allDPositions = new Matrix(batchSize * seqLen, this.dModel);
     for (let b = 0; b < batchSize; b++) {
       for (let t = 0; t < seqLen; t++) {
-        const dPos = new Matrix(1, this.dModel);
-        for (let d = 0; d < this.dModel; d++)
-          dPos.set(0, d, dNorm2.get(b, t * this.dModel + d));
-        
-        const dFF2 = this.ff2.backward(dPos);
-        this.ff1.backward(dFF2);
+        const row = b * seqLen + t;
+        for (let d = 0; d < this.dModel; d++) {
+          allPositions.set(row, d, this._ffInput.get(b, t * this.dModel + d));
+          allDPositions.set(row, d, dNorm2.get(b, t * this.dModel + d));
+        }
       }
     }
+    
+    // Forward all positions as a batch, then backward as a batch
+    // This correctly accumulates gradients across all positions
+    const ff1Out = this.ff1.forward(allPositions);
+    this.ff2.forward(ff1Out);
+    const dFF2 = this.ff2.backward(allDPositions);
+    this.ff1.backward(dFF2);
     
     // Continue backward through norm1 and attention
     const dNorm1 = this.norm1.backward(dNorm2);
