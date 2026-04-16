@@ -81,6 +81,9 @@ export class Adam {
   }
 
   update(param, grad, key = '') {
+    // Auto-step: if step() wasn't called, increment t now
+    // Prevents NaN from bias correction dividing by zero
+    if (this.t === 0) this.t = 1;
     const { m, v } = this._getState(key, grad);
 
     // Update biased first moment estimate
@@ -170,6 +173,8 @@ export class AdamW {
   step() { this.t++; }
 
   update(param, grad, key = '') {
+    // Auto-step: prevent NaN from bias correction dividing by zero
+    if (this.t === 0) this.t = 1;
     const { m, v } = this._getState(key, grad);
 
     const newM = m.mul(this.beta1).add(grad.mul(1 - this.beta1));
