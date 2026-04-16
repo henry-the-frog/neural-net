@@ -116,6 +116,7 @@ export class LayerNorm {
     const batchSize = dOutput.rows;
     const seqLen = Math.floor(dOutput.cols / this.dModel);
     const dInput = new Matrix(batchSize, dOutput.cols);
+    const N = this.dModel;
     
     let dGamma = Matrix.zeros(1, this.dModel);
     let dBeta = Matrix.zeros(1, this.dModel);
@@ -124,15 +125,34 @@ export class LayerNorm {
       for (let t = 0; t < seqLen; t++) {
         const offset = t * this.dModel;
         const std = this._std[b * seqLen + t];
+        const invStd = 1 / std;
         
+        // Accumulate dGamma, dBeta
         for (let d = 0; d < this.dModel; d++) {
           const dOut = dOutput.get(b, offset + d);
           const norm = this._normalized.get(b, offset + d);
           dGamma.set(0, d, dGamma.get(0, d) + dOut * norm);
           dBeta.set(0, d, dBeta.get(0, d) + dOut);
-          
-          // Simplified gradient (ignoring cross-terms for efficiency)
-          dInput.set(b, offset + d, dOut * this.gamma.get(0, d) / std);
+        }
+        
+        // Full LayerNorm backward for dInput:
+        // dX = (1/std) * (gamma * dOut - mean(gamma * dOut) - xhat * mean(gamma * dOut * xhat))
+        // where xhat = normalized values
+        let sumGammaDout = 0;
+        let sumGammaDoutXhat = 0;
+        for (let d = 0; d < N; d++) {
+          const gd = this.gamma.get(0, d) * dOutput.get(b, offset + d);
+          sumGammaDout += gd;
+          sumGammaDoutXhat += gd * this._normalized.get(b, offset + d);
+        }
+        const meanGammaDout = sumGammaDout / N;
+        const meanGammaDoutXhat = sumGammaDoutXhat / N;
+        
+        for (let d = 0; d < N; d++) {
+          const gd = this.gamma.get(0, d) * dOutput.get(b, offset + d);
+          const xhat = this._normalized.get(b, offset + d);
+          const dx = invStd * (gd - meanGammaDout - xhat * meanGammaDoutXhat);
+          dInput.set(b, offset + d, dx);
         }
       }
     }
