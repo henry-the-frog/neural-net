@@ -169,6 +169,14 @@ export class MixtureOfExperts {
     const dInput = Matrix.zeros(batchSize, this.inputSize);
     const dGateProbs = Matrix.zeros(batchSize, this.numExperts);
 
+    // Track accumulated weight gradients for each expert
+    // (Dense.backward() overwrites dWeights, so we must accumulate manually)
+    const expertGradAccum = this.experts.map(expert => ({
+      fc1dW: null, fc1dB: null,
+      fc2dW: null, fc2dB: null,
+      count: 0
+    }));
+
     for (let b = 0; b < batchSize; b++) {
       const indices = this.topKIndices[b];
       const weights = this.topKWeights[b];
@@ -185,10 +193,27 @@ export class MixtureOfExperts {
 
         // Backward through expert
         // Must re-run forward to set correct internal caches for this sample
-        // (expert may have been called with a different sample later in the batch)
         const sample = extractRow(this.input, b);
         this.experts[expertIdx].forward(sample);
         const dExpertInput = this.experts[expertIdx].backward(dExpertOut);
+
+        // Accumulate expert weight gradients across batch samples
+        const accum = expertGradAccum[expertIdx];
+        const expert = this.experts[expertIdx];
+        if (accum.count === 0) {
+          // First sample: clone the gradients
+          accum.fc1dW = expert.fc1.dWeights.clone();
+          accum.fc1dB = expert.fc1.dBiases.clone();
+          accum.fc2dW = expert.fc2.dWeights.clone();
+          accum.fc2dB = expert.fc2.dBiases.clone();
+        } else {
+          // Subsequent samples: add to accumulated gradients
+          accum.fc1dW = accum.fc1dW.add(expert.fc1.dWeights);
+          accum.fc1dB = accum.fc1dB.add(expert.fc1.dBiases);
+          accum.fc2dW = accum.fc2dW.add(expert.fc2.dWeights);
+          accum.fc2dB = accum.fc2dB.add(expert.fc2.dBiases);
+        }
+        accum.count++;
 
         // Accumulate input gradient
         for (let d = 0; d < this.inputSize; d++) {
@@ -201,6 +226,17 @@ export class MixtureOfExperts {
           gateGrad += dOutput.get(b, d) * this.expertOutputs[b][k].get(0, d);
         }
         dGateProbs.set(b, expertIdx, dGateProbs.get(b, expertIdx) + gateGrad);
+      }
+    }
+
+    // Set accumulated gradients on experts (so update() picks them up)
+    for (let e = 0; e < this.experts.length; e++) {
+      const accum = expertGradAccum[e];
+      if (accum.count > 0) {
+        this.experts[e].fc1.dWeights = accum.fc1dW;
+        this.experts[e].fc1.dBiases = accum.fc1dB;
+        this.experts[e].fc2.dWeights = accum.fc2dW;
+        this.experts[e].fc2.dBiases = accum.fc2dB;
       }
     }
 
