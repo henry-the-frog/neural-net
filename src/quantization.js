@@ -2,18 +2,19 @@
 // Reduce precision for efficient inference
 // Implements: uniform quantization, per-channel, symmetric/asymmetric, fake quantization
 
-// ===== Uniform Quantization =====
-// Map floating point values to fixed-point integers
+function toArr(v) { return v && v.data instanceof Float64Array ? Array.from(v.data) : Array.isArray(v) ? v : [...v]; }
 
+// ===== Uniform Quantization =====
 export function quantize(values, bits = 8, symmetric = true) {
+  const arr = toArr(values);
   const qMin = symmetric ? -(1 << (bits - 1)) : 0;
   const qMax = symmetric ? (1 << (bits - 1)) - 1 : (1 << bits) - 1;
 
-  const max = Math.max(...values.map(Math.abs));
+  const max = Math.max(...arr.map(Math.abs));
   const scale = max > 0 ? (symmetric ? max / qMax : max / (qMax - qMin)) : 1;
-  const zeroPoint = symmetric ? 0 : Math.round(-Math.min(...values) / scale);
+  const zeroPoint = symmetric ? 0 : Math.round(-Math.min(...arr) / scale);
 
-  const quantized = values.map(v => {
+  const quantized = arr.map(v => {
     const q = Math.round(v / scale + zeroPoint);
     return Math.max(qMin, Math.min(qMax, q));
   });
@@ -22,7 +23,8 @@ export function quantize(values, bits = 8, symmetric = true) {
 }
 
 export function dequantize(quantized, scale, zeroPoint = 0) {
-  return quantized.map(q => (q - zeroPoint) * scale);
+  const arr = toArr(quantized);
+  return arr.map(q => (q - zeroPoint) * scale);
 }
 
 // ===== Fake Quantization (for quantization-aware training) =====
@@ -144,4 +146,13 @@ export function analyzeSensitivity(layers, testFn, bits = [2, 4, 8, 16]) {
   }
 
   return results;
+}
+
+export function quantizeWeights(weights, bits = 8) {
+  const flat = toArr(weights);
+  return quantize(flat, bits);
+}
+
+export function bitsRequired(range) {
+  return Math.ceil(Math.log2(range + 1));
 }
