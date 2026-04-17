@@ -184,8 +184,10 @@ export class MixtureOfExperts {
         }
 
         // Backward through expert
+        // Must re-run forward to set correct internal caches for this sample
+        // (expert may have been called with a different sample later in the batch)
         const sample = extractRow(this.input, b);
-        this.experts[expertIdx].fc1.input = sample;
+        this.experts[expertIdx].forward(sample);
         const dExpertInput = this.experts[expertIdx].backward(dExpertOut);
 
         // Accumulate input gradient

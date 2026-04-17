@@ -174,17 +174,8 @@ export class CapsuleLayer {
       }
     }
 
-    // Update weights
-    const lr = 0.01;
-    for (let i = 0; i < this.inputCapsules; i++) {
-      for (let j = 0; j < this.numCapsules; j++) {
-        for (let d = 0; d < this.capsuleDim; d++) {
-          for (let k = 0; k < this.inputDim; k++) {
-            this.W[i][j][d][k] -= lr * dW[i][j][d][k];
-          }
-        }
-      }
-    }
+    // Store weight gradients for separate update step
+    this.dW = dW;
 
     // Input gradients
     const dInput = [];
@@ -201,6 +192,19 @@ export class CapsuleLayer {
     }
 
     return dInput;
+  }
+
+  update(learningRate = 0.01) {
+    if (!this.dW) return;
+    for (let i = 0; i < this.inputCapsules; i++) {
+      for (let j = 0; j < this.numCapsules; j++) {
+        for (let d = 0; d < this.capsuleDim; d++) {
+          for (let k = 0; k < this.inputDim; k++) {
+            this.W[i][j][d][k] -= learningRate * this.dW[i][j][d][k];
+          }
+        }
+      }
+    }
   }
 
   paramCount() {

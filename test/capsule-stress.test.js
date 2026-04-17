@@ -83,7 +83,7 @@ describe('CapsuleLayer Training', () => {
         });
         if (firstLoss === null) firstLoss = loss;
         layer.backward(dOutput);
-        // update is done inside backward with hardcoded lr=0.01
+        layer.update(0.01);
       }
       
       const finalOutput = layer.forward(inputs);

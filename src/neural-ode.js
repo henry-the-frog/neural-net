@@ -168,8 +168,10 @@ export class NeuralODELayer {
   // Instead of backpropagating through the solver steps,
   // we solve an augmented ODE backward in time
   backward(dOutput) {
-    // Simplified adjoint: backprop through the discrete solver steps
-    // (True adjoint would solve another ODE backward, but this is more practical)
+    // Simplified adjoint: backprop through the discrete Euler steps
+    // For Euler: y_{n+1} = y_n + h * f(t_n, y_n)
+    // dy_loss/dy_n = dy_loss/dy_{n+1} + dy_loss/dy_{n+1} * h * df/dy_n
+    // = adjoint + h * backprop(adjoint through f)
     const h = (this.t1 - this.t0) / this.steps;
     let adjoint = dOutput;
 
@@ -178,14 +180,17 @@ export class NeuralODELayer {
       const y = this.trajectory[step].y;
       const t = this.trajectory[step].t;
 
-      // Forward through dynamics at this point to set up gradients
+      // Forward through dynamics at this point to set up layer caches
       this.func.evaluate(t, y);
 
-      // Backprop through the dynamics network
+      // Backprop adjoint through the dynamics network: compute df/dy * adjoint
       let dFunc = adjoint;
       for (let l = this.func.layers.length - 1; l >= 0; l--) {
-        dFunc = this.func.layers[l].backward(matScale(dFunc, h));
+        dFunc = this.func.layers[l].backward(dFunc);
       }
+
+      // Update adjoint: adjoint_n = adjoint_{n+1} + h * (df/dy * adjoint_{n+1})
+      adjoint = matAdd(adjoint, matScale(dFunc, h));
     }
 
     return adjoint; // Gradient w.r.t. initial state

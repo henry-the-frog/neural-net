@@ -175,17 +175,23 @@ export class KANLayer {
 
           // Gradient for input (through both spline and residual)
           // dSpline/dx requires derivative of basis functions — approximate with finite difference
-          const eps = 1e-5;
+          // If input is outside the grid range, the spline output is constant (clamped),
+          // so dSpline/dx = 0 — only the residual contributes.
           const xClamped = Math.max(this.gridRange[0], Math.min(this.gridRange[1], x));
-          const basisPlus = bsplineBasis(
-            Math.min(this.gridRange[1], xClamped + eps), this.knots, this.splineOrder);
-          const basisMinus = bsplineBasis(
-            Math.max(this.gridRange[0], xClamped - eps), this.knots, this.splineOrder);
-
           let dSplineDx = 0;
-          for (let k = 0; k < this.numBasis; k++) {
-            dSplineDx += this.coeffs[i][j][k] * (basisPlus[k] - basisMinus[k]) / (2 * eps);
+          if (x > this.gridRange[0] && x < this.gridRange[1]) {
+            // Inside range: compute basis derivative via finite difference
+            const fdEps = 1e-5;
+            const basisPlus = bsplineBasis(
+              Math.min(this.gridRange[1], xClamped + fdEps), this.knots, this.splineOrder);
+            const basisMinus = bsplineBasis(
+              Math.max(this.gridRange[0], xClamped - fdEps), this.knots, this.splineOrder);
+
+            for (let k = 0; k < this.numBasis; k++) {
+              dSplineDx += this.coeffs[i][j][k] * (basisPlus[k] - basisMinus[k]) / (2 * fdEps);
+            }
           }
+          // Outside range: dSplineDx stays 0 (spline is flat due to clamping)
 
           dInput.set(b, i, dInput.get(b, i) + dOut * (dSplineDx + this.residualWeights[i][j]));
         }
