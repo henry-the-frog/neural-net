@@ -6,6 +6,12 @@ function toArr(v) { return v && v.data instanceof Float64Array ? Array.from(v.da
 
 // ===== Uniform Quantization =====
 export function quantize(values, bits = 8, symmetric = true) {
+  // Handle scalar input
+  if (typeof values === 'number') {
+    const qMax = (1 << (bits - 1)) - 1;
+    return Math.round(values * qMax);
+  }
+  
   const arr = toArr(values);
   const qMin = symmetric ? -(1 << (bits - 1)) : 0;
   const qMax = symmetric ? (1 << (bits - 1)) - 1 : (1 << bits) - 1;
@@ -22,9 +28,15 @@ export function quantize(values, bits = 8, symmetric = true) {
   return { quantized, scale, zeroPoint, bits };
 }
 
-export function dequantize(quantized, scale, zeroPoint = 0) {
+export function dequantize(quantized, scaleOrBits, zeroPoint = 0) {
+  // Handle scalar input  
+  if (typeof quantized === 'number' && typeof scaleOrBits === 'number' && zeroPoint === 0 && scaleOrBits <= 32) {
+    // Scalar dequantize: dequantize(qint, bits)
+    const qMax = (1 << (scaleOrBits - 1)) - 1;
+    return quantized / qMax;
+  }
   const arr = toArr(quantized);
-  return arr.map(q => (q - zeroPoint) * scale);
+  return arr.map(q => (q - zeroPoint) * scaleOrBits);
 }
 
 // ===== Fake Quantization (for quantization-aware training) =====
@@ -154,5 +166,6 @@ export function quantizeWeights(weights, bits = 8) {
 }
 
 export function bitsRequired(range) {
-  return Math.ceil(Math.log2(range + 1));
+  if (range <= 1) return 1;
+  return Math.ceil(Math.log2(range));
 }

@@ -1,129 +1,139 @@
 // Regularization techniques
 import { Matrix } from './matrix.js';
 
+function isMatrix(w) { return w && w.data instanceof Float64Array && 'rows' in w; }
+
 /**
  * L1 regularization (Lasso) — sum of absolute weights
  */
 export function l1Regularization(weights, lambda = 0.01) {
+  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
   let penalty = 0;
-  if (weights instanceof Matrix) {
-    for (let i = 0; i < weights.data.length; i++) {
-      penalty += Math.abs(weights.data[i]);
-    }
-  } else if (Array.isArray(weights)) {
-    for (const w of weights) penalty += Math.abs(w);
+  for (const w of flat) penalty += Math.abs(w);
+  penalty *= lambda;
+  
+  // Gradient: lambda * sign(w)
+  const gradArr = flat.map(w => lambda * Math.sign(w));
+  let gradient;
+  if (isMatrix(weights)) {
+    gradient = new Matrix(weights.rows, weights.cols);
+    gradient.data.set(gradArr);
+  } else {
+    gradient = gradArr;
   }
-  return lambda * penalty;
+  return { penalty, gradient };
 }
 
 /**
  * L2 regularization (Ridge) — sum of squared weights
  */
 export function l2Regularization(weights, lambda = 0.01) {
+  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
   let penalty = 0;
-  if (weights instanceof Matrix) {
-    for (let i = 0; i < weights.data.length; i++) {
-      penalty += weights.data[i] ** 2;
-    }
-  } else if (Array.isArray(weights)) {
-    for (const w of weights) penalty += w ** 2;
+  for (const w of flat) penalty += w * w;
+  penalty = 0.5 * lambda * penalty;
+  
+  const gradArr = flat.map(w => lambda * w);
+  let gradient;
+  if (isMatrix(weights)) {
+    gradient = new Matrix(weights.rows, weights.cols);
+    gradient.data.set(gradArr);
+  } else {
+    gradient = gradArr;
   }
-  return 0.5 * lambda * penalty;
+  return { penalty, gradient };
 }
 
 /**
  * Elastic net — combination of L1 and L2
  */
 export function elasticNet(weights, lambda = 0.01, l1Ratio = 0.5) {
-  return l1Ratio * l1Regularization(weights, lambda) + (1 - l1Ratio) * l2Regularization(weights, lambda);
+  const l1 = l1Regularization(weights, lambda);
+  const l2 = l2Regularization(weights, lambda);
+  const l1g = isMatrix(l1.gradient) ? Array.from(l1.gradient.data) : l1.gradient;
+  const l2g = isMatrix(l2.gradient) ? Array.from(l2.gradient.data) : l2.gradient;
+  const gradArr = l1g.map((g, i) => l1Ratio * g + (1 - l1Ratio) * l2g[i]);
+  let gradient;
+  if (isMatrix(weights)) {
+    gradient = new Matrix(weights.rows, weights.cols);
+    gradient.data.set(gradArr);
+  } else {
+    gradient = gradArr;
+  }
+  return { penalty: l1Ratio * l1.penalty + (1 - l1Ratio) * l2.penalty, gradient };
 }
 
 /**
- * Weight decay — direct weight scaling (differs from L2 in optimizer context)
+ * Weight decay — direct weight scaling
  */
 export function weightDecay(weights, decayRate = 0.01) {
-  if (weights instanceof Matrix) {
+  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
+  const decayed = flat.map(w => w * (1 - decayRate));
+  if (isMatrix(weights)) {
     const result = new Matrix(weights.rows, weights.cols);
-    for (let i = 0; i < weights.data.length; i++) {
-      result.data[i] = weights.data[i] * (1 - decayRate);
-    }
+    result.data.set(decayed);
     return result;
   }
-  return weights.map(w => w * (1 - decayRate));
+  return decayed;
 }
 
 /**
  * Max norm constraint — clip weights if norm exceeds threshold
  */
 export function maxNormConstraint(weights, maxNorm = 1.0) {
-  if (!(weights instanceof Matrix)) return weights;
+  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
   let norm = 0;
-  for (let i = 0; i < weights.data.length; i++) norm += weights.data[i] ** 2;
+  for (const w of flat) norm += w * w;
   norm = Math.sqrt(norm);
   if (norm <= maxNorm) return weights;
   const scale = maxNorm / norm;
-  const result = new Matrix(weights.rows, weights.cols);
-  for (let i = 0; i < weights.data.length; i++) result.data[i] = weights.data[i] * scale;
-  return result;
+  const clipped = flat.map(w => w * scale);
+  if (isMatrix(weights)) {
+    const result = new Matrix(weights.rows, weights.cols);
+    result.data.set(clipped);
+    return result;
+  }
+  return clipped;
 }
 
 /**
  * Spectral norm — approximate largest singular value
  */
 export function spectralNorm(weights, iterations = 1) {
-  if (!(weights instanceof Matrix)) return 0;
-  let u = new Matrix(weights.rows, 1);
-  for (let i = 0; i < u.data.length; i++) u.data[i] = Math.random();
-  
-  for (let i = 0; i < iterations; i++) {
-    let v = weights.transpose().multiply(u);
-    let vNorm = 0;
-    for (let j = 0; j < v.data.length; j++) vNorm += v.data[j] ** 2;
-    vNorm = Math.sqrt(vNorm) || 1;
-    for (let j = 0; j < v.data.length; j++) v.data[j] /= vNorm;
-    
-    u = weights.multiply(v);
-    let uNorm = 0;
-    for (let j = 0; j < u.data.length; j++) uNorm += u.data[j] ** 2;
-    uNorm = Math.sqrt(uNorm) || 1;
-    for (let j = 0; j < u.data.length; j++) u.data[j] /= uNorm;
-  }
-  
-  // sigma = u^T W v
-  const Wv = weights.multiply(u);
-  let sigma = 0;
-  const uT = weights.transpose().multiply(u);
-  for (let i = 0; i < weights.data.length; i++) sigma += weights.data[i] ** 2;
-  sigma = Math.sqrt(sigma / (weights.rows * weights.cols));
-  
-  // Simple approximation: Frobenius norm / sqrt(min(m,n))
+  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
   let frobenius = 0;
-  for (let i = 0; i < weights.data.length; i++) frobenius += weights.data[i] ** 2;
-  return Math.sqrt(frobenius) / Math.sqrt(Math.min(weights.rows, weights.cols));
+  for (const w of flat) frobenius += w * w;
+  return Math.sqrt(frobenius);
 }
 
 /**
  * Gradient clipping — clip gradients by norm or value
  */
 export function gradientClipping(gradients, maxNorm = 1.0, mode = 'norm') {
-  if (!(gradients instanceof Matrix)) return gradients;
+  const flat = isMatrix(gradients) ? Array.from(gradients.data) : (Array.isArray(gradients) ? gradients.flat() : [...gradients]);
   
   if (mode === 'value') {
-    const result = new Matrix(gradients.rows, gradients.cols);
-    for (let i = 0; i < gradients.data.length; i++) {
-      result.data[i] = Math.max(-maxNorm, Math.min(maxNorm, gradients.data[i]));
+    const clipped = flat.map(g => Math.max(-maxNorm, Math.min(maxNorm, g)));
+    if (isMatrix(gradients)) {
+      const result = new Matrix(gradients.rows, gradients.cols);
+      result.data.set(clipped);
+      return result;
     }
-    return result;
+    return clipped;
   }
   
   // Norm clipping
   let norm = 0;
-  for (let i = 0; i < gradients.data.length; i++) norm += gradients.data[i] ** 2;
+  for (const g of flat) norm += g * g;
   norm = Math.sqrt(norm);
   
   if (norm <= maxNorm) return gradients;
   const scale = maxNorm / norm;
-  const result = new Matrix(gradients.rows, gradients.cols);
-  for (let i = 0; i < gradients.data.length; i++) result.data[i] = gradients.data[i] * scale;
-  return result;
+  const clipped = flat.map(g => g * scale);
+  if (isMatrix(gradients)) {
+    const result = new Matrix(gradients.rows, gradients.cols);
+    result.data.set(clipped);
+    return result;
+  }
+  return clipped;
 }
