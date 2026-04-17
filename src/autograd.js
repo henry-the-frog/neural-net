@@ -224,8 +224,9 @@ export function mean(vars) {
 // MSE loss
 export function mseLoss(predictions, targets) {
   const diffs = predictions.map((p, i) => {
+    const pVar = p instanceof Variable ? p : constant(p);
     const t = targets[i] instanceof Variable ? targets[i] : constant(targets[i]);
-    const diff = sub(p, t);
+    const diff = sub(pVar, t);
     return pow(diff, 2);
   });
   return mean(diffs);
