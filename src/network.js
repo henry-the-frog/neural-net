@@ -5,6 +5,16 @@ import { getLoss } from './loss.js';
 import { Matrix } from './matrix.js';
 import { createOptimizer } from './optimizer.js';
 
+// Import all layer types for serialization/deserialization
+let Conv2D, MaxPool2D, Flatten, BatchNorm, RNN, LSTM, GRU, Dropout, Embedding, KANLayer, MixtureOfExperts;
+try { ({ Conv2D, MaxPool2D, Flatten } = await import('./conv.js')); } catch {}
+try { ({ BatchNorm } = await import('./batchnorm.js')); } catch {}
+try { ({ RNN, LSTM, GRU } = await import('./rnn.js')); } catch {}
+try { ({ Dropout } = await import('./dropout.js')); } catch {}
+try { ({ Embedding } = await import('./embedding.js')); } catch {}
+try { ({ KANLayer } = await import('./kan.js')); } catch {}
+try { ({ MixtureOfExperts } = await import('./moe.js')); } catch {}
+
 export class Network {
   constructor(layers) {
     this.layers = [];
@@ -415,29 +425,150 @@ export class Network {
     const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
     const net = new Network();
 
-    for (const layerData of data.layers) {
-      if (layerData.type === 'Dense') {
-        const layer = new Dense(layerData.inputSize, layerData.outputSize, layerData.activation);
-        if (layerData.weightShape) {
-          // v2 format: flat array + shape
-          layer.weights = new Matrix(layerData.weightShape[0], layerData.weightShape[1],
-            new Float64Array(layerData.weights));
-          layer.biases = new Matrix(layerData.biasShape[0], layerData.biasShape[1],
-            new Float64Array(layerData.biases));
-        } else if (layerData.weights) {
-          // v1 format: 2D arrays
-          layer.weights = Matrix.fromArray(layerData.weights);
-          if (layerData.biases) {
-            const b = Matrix.fromArray(layerData.biases);
-            layer.biases = b.rows === 1 ? b : new Matrix(1, b.rows).map((_, i, j) => b.get(j, 0));
+    for (const d of data.layers) {
+      let layer;
+      switch (d.type) {
+        case 'Dense': {
+          layer = new Dense(d.inputSize, d.outputSize, d.activation);
+          if (d.weightShape) {
+            layer.weights = new Matrix(d.weightShape[0], d.weightShape[1], new Float64Array(d.weights));
+            layer.biases = new Matrix(d.biasShape[0], d.biasShape[1], new Float64Array(d.biases));
+          } else if (d.weights) {
+            layer.weights = Matrix.fromArray(d.weights);
+            if (d.biases) {
+              const b = Matrix.fromArray(d.biases);
+              layer.biases = b.rows === 1 ? b : new Matrix(1, b.rows).map((_, i, j) => b.get(j, 0));
+            }
           }
+          break;
         }
-        net.layers.push(layer);
+        case 'Conv2D': {
+          if (!Conv2D) throw new Error('Conv2D not available for deserialization');
+          layer = new Conv2D(d.inputH, d.inputW, d.channels, d.numFilters, d.filterSize, 
+            d.activation || 'relu', { stride: d.stride || 1, padding: d.padding || 0 });
+          if (d.filterShape) {
+            layer.filters = new Matrix(d.filterShape[0], d.filterShape[1], new Float64Array(d.filters));
+          }
+          if (d.biasShape) {
+            layer.biases = new Matrix(d.biasShape[0], d.biasShape[1], new Float64Array(d.biases));
+          }
+          break;
+        }
+        case 'BatchNorm': {
+          if (!BatchNorm) throw new Error('BatchNorm not available for deserialization');
+          layer = new BatchNorm(d.size);
+          layer.gamma = new Matrix(1, d.size, new Float64Array(d.gamma));
+          layer.beta = new Matrix(1, d.size, new Float64Array(d.beta));
+          layer.runningMean = new Matrix(1, d.size, new Float64Array(d.runningMean));
+          layer.runningVar = new Matrix(1, d.size, new Float64Array(d.runningVar));
+          layer.training = false; // Loaded models default to inference mode
+          break;
+        }
+        case 'RNN': {
+          if (!RNN) throw new Error('RNN not available for deserialization');
+          layer = new RNN(d.inputSize, d.hiddenSize, { returnSequences: d.returnSequences });
+          layer.Wih = new Matrix(d.inputSize, d.hiddenSize, new Float64Array(d.Wih));
+          layer.Whh = new Matrix(d.hiddenSize, d.hiddenSize, new Float64Array(d.Whh));
+          layer.bh = new Matrix(1, d.hiddenSize, new Float64Array(d.bh));
+          break;
+        }
+        case 'LSTM': {
+          if (!LSTM) throw new Error('LSTM not available for deserialization');
+          layer = new LSTM(d.inputSize, d.hiddenSize, { returnSequences: d.returnSequences });
+          for (const gate of ['Wi', 'Wf', 'Wc', 'Wo', 'bi', 'bf', 'bc', 'bo']) {
+            if (d[gate]) {
+              const orig = layer[gate];
+              layer[gate] = new Matrix(orig.rows, orig.cols, new Float64Array(d[gate]));
+            }
+          }
+          break;
+        }
+        case 'GRU': {
+          if (!GRU) throw new Error('GRU not available for deserialization');
+          layer = new GRU(d.inputSize, d.hiddenSize, { returnSequences: d.returnSequences });
+          for (const name of ['Wz', 'Wr', 'Wh', 'bz', 'br', 'bh']) {
+            if (d[name] && d[name + 'Shape']) {
+              layer[name] = new Matrix(d[name + 'Shape'][0], d[name + 'Shape'][1], new Float64Array(d[name]));
+            }
+          }
+          break;
+        }
+        case 'Dropout': {
+          if (!Dropout) throw new Error('Dropout not available for deserialization');
+          layer = new Dropout(d.rate);
+          layer.training = false; // Loaded models default to inference mode
+          break;
+        }
+        case 'Embedding': {
+          if (!Embedding) throw new Error('Embedding not available for deserialization');
+          layer = new Embedding(d.vocabSize, d.embedDim);
+          if (d.weightShape) {
+            layer.weights = new Matrix(d.weightShape[0], d.weightShape[1], new Float64Array(d.weights));
+          }
+          break;
+        }
+        case 'Flatten': {
+          if (!Flatten) throw new Error('Flatten not available for deserialization');
+          layer = new Flatten();
+          if (d.inputH) layer.inputH = d.inputH;
+          if (d.inputW) layer.inputW = d.inputW;
+          if (d.channels || d.inputC) layer.inputC = d.channels || d.inputC;
+          if (d.inputSize) layer.inputSize = d.inputSize;
+          if (d.outputSize) layer.outputSize = d.outputSize;
+          break;
+        }
+        case 'MaxPool2D': {
+          if (!MaxPool2D) throw new Error('MaxPool2D not available for deserialization');
+          layer = new MaxPool2D(d.inputH, d.inputW, d.channels || d.inputC, d.poolSize || 2);
+          break;
+        }
+        case 'KANLayer': {
+          if (!KANLayer) throw new Error('KANLayer not available for deserialization');
+          layer = new KANLayer(d.inputSize, d.outputSize, d.numBasis, d.splineOrder, d.gridRange);
+          // Restore coefficients
+          if (d.coeffs) {
+            layer.coeffs = d.coeffs.map(row => row.map(col => Array.from(col)));
+          }
+          if (d.residualWeights) {
+            layer.residualWeights = d.residualWeights.map(row => Array.from(row));
+          }
+          break;
+        }
+        case 'MixtureOfExperts': {
+          if (!MixtureOfExperts) throw new Error('MixtureOfExperts not available for deserialization');
+          layer = new MixtureOfExperts(d.inputSize, d.numExperts, d.hiddenSize, d.outputSize);
+          // Restore gate weights
+          if (d.gateWeightShape && layer.gate) {
+            layer.gate.weights = new Matrix(d.gateWeightShape[0], d.gateWeightShape[1], new Float64Array(d.gateWeights));
+            layer.gate.biases = new Matrix(d.gateBiasShape[0], d.gateBiasShape[1], new Float64Array(d.gateBiases));
+          }
+          // Restore expert weights
+          if (d.experts && layer.experts) {
+            for (let i = 0; i < Math.min(d.experts.length, layer.experts.length); i++) {
+              const ed = d.experts[i];
+              const expert = layer.experts[i];
+              if (ed.fc1) {
+                expert.fc1.weights = new Matrix(ed.fc1.weightShape[0], ed.fc1.weightShape[1], new Float64Array(ed.fc1.weights));
+                expert.fc1.biases = new Matrix(ed.fc1.biasShape[0], ed.fc1.biasShape[1], new Float64Array(ed.fc1.biases));
+              }
+              if (ed.fc2) {
+                expert.fc2.weights = new Matrix(ed.fc2.weightShape[0], ed.fc2.weightShape[1], new Float64Array(ed.fc2.weights));
+                expert.fc2.biases = new Matrix(ed.fc2.biasShape[0], ed.fc2.biasShape[1], new Float64Array(ed.fc2.biases));
+              }
+            }
+          }
+          break;
+        }
+        default:
+          throw new Error(`Unknown layer type for deserialization: ${d.type}`);
       }
-      // Other layer types can be added here
+      if (layer) net.layers.push(layer);
     }
 
     if (data.loss) net.loss(data.loss);
+    if (data.optimizer) {
+      try { net.optimizer(data.optimizer); } catch { /* optional */ }
+    }
     return net;
   }
 
@@ -482,10 +613,10 @@ export class Network {
       } else if (layer.constructor.name === 'Conv2D') {
         info.inputH = layer.inputH;
         info.inputW = layer.inputW;
-        info.channels = layer.channels;
+        info.channels = layer.inputC;
         info.numFilters = layer.numFilters;
         info.filterSize = layer.filterSize;
-        info.activation = layer.activationName || 'linear';
+        info.activation = layer.activation?.name || 'linear';
         info.stride = layer.stride;
         info.padding = layer.padding;
         info.filters = Array.from(layer.filters.data);
@@ -520,7 +651,68 @@ export class Network {
         if (layer.inputH) info.inputH = layer.inputH;
         if (layer.inputW) info.inputW = layer.inputW;
         if (layer.channels) info.channels = layer.channels;
+        if (layer.inputC) info.inputC = layer.inputC;
         if (layer.poolSize) info.poolSize = layer.poolSize;
+      } else if (layer.constructor.name === 'GRU') {
+        info.inputSize = layer.inputSize;
+        info.hiddenSize = layer.hiddenSize;
+        info.returnSequences = layer.returnSequences;
+        info.Wz = Array.from(layer.Wz.data); info.WzShape = [layer.Wz.rows, layer.Wz.cols];
+        info.Wr = Array.from(layer.Wr.data); info.WrShape = [layer.Wr.rows, layer.Wr.cols];
+        info.Wh = Array.from(layer.Wh.data); info.WhShape = [layer.Wh.rows, layer.Wh.cols];
+        info.bz = Array.from(layer.bz.data); info.bzShape = [layer.bz.rows, layer.bz.cols];
+        info.br = Array.from(layer.br.data); info.brShape = [layer.br.rows, layer.br.cols];
+        info.bh = Array.from(layer.bh.data); info.bhShape = [layer.bh.rows, layer.bh.cols];
+      } else if (layer.constructor.name === 'Dropout') {
+        info.rate = layer.rate;
+      } else if (layer.constructor.name === 'Embedding') {
+        info.vocabSize = layer.vocabSize;
+        info.embedDim = layer.embedDim;
+        info.weights = Array.from(layer.weights.data);
+        info.weightShape = [layer.weights.rows, layer.weights.cols];
+      } else if (layer.constructor.name === 'KANLayer') {
+        info.inputSize = layer.inputSize;
+        info.outputSize = layer.outputSize;
+        info.numBasis = layer.numBasis;
+        info.splineOrder = layer.splineOrder;
+        info.gridRange = layer.gridRange;
+        // Serialize coefficients (nested array [inputSize][outputSize][numBasis])
+        info.coeffs = layer.coeffs.map(row => row.map(col => Array.from(col)));
+        // Serialize residual weights (nested array [inputSize][outputSize])
+        info.residualWeights = layer.residualWeights.map(row => Array.from(row));
+      } else if (layer.constructor.name === 'MixtureOfExperts') {
+        info.inputSize = layer.inputSize;
+        info.numExperts = layer.numExperts || layer.experts?.length;
+        info.hiddenSize = layer.experts?.[0]?.fc1?.outputSize;
+        info.outputSize = layer.outputSize;
+        // Serialize gate weights
+        if (layer.gate) {
+          info.gateWeights = Array.from(layer.gate.weights.data);
+          info.gateWeightShape = [layer.gate.weights.rows, layer.gate.weights.cols];
+          info.gateBiases = Array.from(layer.gate.biases.data);
+          info.gateBiasShape = [layer.gate.biases.rows, layer.gate.biases.cols];
+        }
+        // Serialize expert networks (each has fc1 and fc2 Dense layers)
+        if (layer.experts) {
+          info.experts = layer.experts.map(expert => ({
+            fc1: {
+              weights: Array.from(expert.fc1.weights.data),
+              weightShape: [expert.fc1.weights.rows, expert.fc1.weights.cols],
+              biases: Array.from(expert.fc1.biases.data),
+              biasShape: [expert.fc1.biases.rows, expert.fc1.biases.cols],
+              inputSize: expert.fc1.inputSize,
+              outputSize: expert.fc1.outputSize,
+            },
+            fc2: {
+              weights: Array.from(expert.fc2.weights.data),
+              weightShape: [expert.fc2.weights.rows, expert.fc2.weights.cols],
+              biases: Array.from(expert.fc2.biases.data),
+              biasShape: [expert.fc2.biases.rows, expert.fc2.biases.cols],
+              inputSize: expert.fc2.inputSize,
+              outputSize: expert.fc2.outputSize,
+            },
+          }));
+        }
       }
 
       return info;
@@ -541,30 +733,7 @@ export class Network {
 
   // Load network from JSON string or object
   static load(jsonOrString) {
-    const data = typeof jsonOrString === 'string' ? JSON.parse(jsonOrString) : jsonOrString;
-    const net = new Network();
-
-    // We need to import layer constructors dynamically
-    // Since they're already imported at the top, use a registry
-    for (const layerInfo of data.layers) {
-      switch (layerInfo.type) {
-        case 'Dense': {
-          const layer = new Dense(layerInfo.inputSize, layerInfo.outputSize, layerInfo.activation);
-          layer.weights = new Matrix(layerInfo.weightShape[0], layerInfo.weightShape[1],
-            new Float64Array(layerInfo.weights));
-          layer.biases = new Matrix(layerInfo.biasShape[0], layerInfo.biasShape[1],
-            new Float64Array(layerInfo.biases));
-          net.add(layer);
-          break;
-        }
-        // For other layer types, we'd need their imports here
-        // For now, Dense-only loading is the most common case
-        default:
-          throw new Error(`Cannot load layer type: ${layerInfo.type}. Only Dense layers supported for load.`);
-      }
-    }
-
-    if (data.loss) net.loss(data.loss);
-    return net;
+    // Delegate to the comprehensive fromJSON method
+    return Network.fromJSON(jsonOrString);
   }
 }
