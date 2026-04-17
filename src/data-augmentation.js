@@ -42,10 +42,10 @@ export function cutmix(input1, input2, target1, target2, alpha = 1.0) {
   const total = rows * cols;
   const lam = 1 - area / total;
   const mixedTarget = target1 instanceof Matrix 
-    ? target1.scale(lam).add(target2.scale(1 - lam))
+    ? target1.map(v => v * lam).add(target2.map(v => v * (1 - lam)))
     : target1 * lam + target2 * (1 - lam);
   
-  return { data: result, target: mixedTarget, lambda: lam };
+  return { x: result, y: mixedTarget, lambda: lam };
 }
 
 export function flip(data, axis = 'horizontal') {
