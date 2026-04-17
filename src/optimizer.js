@@ -84,12 +84,16 @@ export class Adam {
     // Auto-step: if step() wasn't called, increment t now
     // Prevents NaN from bias correction dividing by zero
     if (this.t === 0) this.t = 1;
-    const { m, v } = this._getState(key, grad);
+    
+    // L2 regularization: add weight decay to gradient (coupled with adaptive rate)
+    const effGrad = this.weightDecay > 0 ? grad.add(param.mul(this.weightDecay)) : grad;
+    
+    const { m, v } = this._getState(key, effGrad);
 
     // Update biased first moment estimate
-    const newM = m.mul(this.beta1).add(grad.mul(1 - this.beta1));
+    const newM = m.mul(this.beta1).add(effGrad.mul(1 - this.beta1));
     // Update biased second raw moment estimate  
-    const newV = v.mul(this.beta2).add(grad.mul(grad).mul(1 - this.beta2));
+    const newV = v.mul(this.beta2).add(effGrad.mul(effGrad).mul(1 - this.beta2));
     
     this._m.set(key, newM);
     this._v.set(key, newV);
@@ -100,11 +104,9 @@ export class Adam {
     const mHat = newM.mul(1.0 / bc1);
     const vHat = newV.mul(1.0 / bc2);
 
-    // Update parameters (with optional L2 weight decay)
+    // Update parameters
     const eps = this.epsilon;
-    let result = param.sub(mHat.mul(this.lr).mul(vHat.map(x => 1.0 / (Math.sqrt(x) + eps))));
-    if (this.weightDecay > 0) result = result.sub(param.mul(this.weightDecay * this.lr));
-    return result;
+    return param.sub(mHat.mul(this.lr).mul(vHat.map(x => 1.0 / (Math.sqrt(x) + eps))));
   }
 }
 
