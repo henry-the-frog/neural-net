@@ -1,5 +1,6 @@
 // pruning.js — Neural Network Pruning
 // Remove unnecessary weights for efficient inference
+import { Matrix } from './matrix.js';
 
 function toArray(weights) {
   if (weights && weights.data instanceof Float64Array) {
@@ -21,8 +22,10 @@ export function magnitudePrune(weights, sparsity = 0.5) {
   const prunedFlat = flat.map(w => Math.abs(w) >= threshold ? w : 0);
   
   if (isMatrix(weights)) {
-    // Return Matrix-like with .data
-    return { data: new Float64Array(prunedFlat), rows: weights.rows, cols: weights.cols, actualSparsity: prunedFlat.filter(w => w === 0).length / prunedFlat.length };
+    // Return a proper Matrix
+    const m = new Matrix(weights.rows, weights.cols, new Float64Array(prunedFlat));
+    m.actualSparsity = prunedFlat.filter(w => w === 0).length / prunedFlat.length;
+    return m;
   }
 
   const mask = Array.isArray(weights[0])
@@ -38,18 +41,53 @@ export function magnitudePrune(weights, sparsity = 0.5) {
 
 // ===== Structured Pruning =====
 // Remove entire neurons/channels based on L1/L2 norm
-export function structuredPrune(weightMatrix, sparsity = 0.3, norm = 'l1') {
-  const norms = weightMatrix.map(row => {
-    if (norm === 'l1') return row.reduce((s, v) => s + Math.abs(v), 0);
-    return Math.sqrt(row.reduce((s, v) => s + v * v, 0));
+export function structuredPrune(weights, sparsity = 0.3, normType = 'l1') {
+  if (isMatrix(weights)) {
+    // Compute norm for each row
+    const norms = [];
+    for (let r = 0; r < weights.rows; r++) {
+      let rowNorm = 0;
+      for (let c = 0; c < weights.cols; c++) {
+        const v = weights.get(r, c);
+        rowNorm += normType === 'l1' ? Math.abs(v) : v * v;
+      }
+      if (normType !== 'l1') rowNorm = Math.sqrt(rowNorm);
+      norms.push(rowNorm);
+    }
+
+    const sorted = [...norms].sort((a, b) => a - b);
+    const threshold = sorted[Math.floor(norms.length * sparsity)] || 0;
+
+    // Zero out rows with norm below threshold
+    const data = new Float64Array(weights.data.length);
+    for (let r = 0; r < weights.rows; r++) {
+      if (norms[r] > threshold) {
+        for (let c = 0; c < weights.cols; c++) {
+          data[r * weights.cols + c] = weights.get(r, c);
+        }
+      }
+      // else: row stays all zeros
+    }
+
+    const m = new Matrix(weights.rows, weights.cols, data);
+    m.actualSparsity = Array.from(data).filter(w => w === 0).length / data.length;
+    return m;
+  }
+
+  // Array fallback
+  const flat = toArray(weights);
+  const norms = flat.map(row => {
+    if (!Array.isArray(row)) return Math.abs(row);
+    return normType === 'l1' 
+      ? row.reduce((s, v) => s + Math.abs(v), 0)
+      : Math.sqrt(row.reduce((s, v) => s + v * v, 0));
   });
-
   const sorted = [...norms].sort((a, b) => a - b);
-  const threshold = sorted[Math.floor(norms.length * sparsity)];
-
+  const threshold = sorted[Math.floor(norms.length * sparsity)] || 0;
   const mask = norms.map(n => n > threshold ? 1 : 0);
-  const pruned = weightMatrix.map((row, i) => mask[i] ? [...row] : row.map(() => 0));
-
+  const pruned = Array.isArray(flat[0])
+    ? flat.map((row, i) => mask[i] ? [...row] : row.map(() => 0))
+    : flat.map((w, i) => mask[i] ? w : 0);
   return { pruned, mask, threshold, removedChannels: mask.filter(m => m === 0).length };
 }
 
@@ -99,7 +137,9 @@ export function randomPrune(weights, ratio = 0.5) {
   if (isMatrix(weights)) {
     const data = new Float64Array(weights.data.length);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() > ratio ? weights.data[i] : 0;
-    return { data, rows: weights.rows, cols: weights.cols, actualSparsity: Array.from(data).filter(w => w === 0).length / data.length };
+    const m = new Matrix(weights.rows, weights.cols, data);
+    m.actualSparsity = Array.from(data).filter(w => w === 0).length / data.length;
+    return m;
   }
   if (Array.isArray(weights[0])) {
     const pruned = weights.map(row => row.map(w => Math.random() > ratio ? w : 0));
