@@ -74,8 +74,8 @@ export function structuredPrune(weights, sparsity = 0.3, normType = 'l1') {
     return m;
   }
 
-  // Array fallback
-  const flat = toArray(weights);
+  // Array fallback — preserve row structure for 2D arrays
+  const flat = Array.isArray(weights[0]) ? weights : toArray(weights);
   const norms = flat.map(row => {
     if (!Array.isArray(row)) return Math.abs(row);
     return normType === 'l1' 
