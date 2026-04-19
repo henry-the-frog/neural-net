@@ -102,9 +102,17 @@ export class Matrix {
   mul(other) {
     const result = new Matrix(this.rows, this.cols);
     if (other instanceof Matrix) {
-      for (let i = 0; i < this.data.length; i++) result.data[i] = this.data[i] * other.data[i];
+      for (let i = 0; i < this.data.length; i++) {
+        const v = this.data[i] * other.data[i];
+        result.data[i] = v === 0 ? 0 : v;  // normalize -0 to 0
+      }
     } else {
-      for (let i = 0; i < this.data.length; i++) result.data[i] = this.data[i] * other;
+      if (other === 0) {
+        // Fast path: multiplying by zero always gives zero
+        result.data.fill(0);
+      } else {
+        for (let i = 0; i < this.data.length; i++) result.data[i] = this.data[i] * other;
+      }
     }
     return result;
   }
