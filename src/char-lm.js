@@ -386,16 +386,77 @@ export class CharLM {
   /**
    * Train on a single sequence: tokens[0..n-1] predict tokens[1..n]
    */
-  trainStep(tokens, lr = 0.001) {
+  trainStep(tokens, lr = 0.001, clipNorm = 1.0) {
     const input = tokens.slice(0, -1);
     const target = tokens.slice(1);
     
     const logits = this.forward(input);
     const { loss, dLogits } = this.loss(logits, target);
     this.backward(dLogits);
+    
+    // Gradient clipping by global norm
+    if (clipNorm > 0) this._clipGradients(clipNorm);
+    
     this.update(lr);
     
     return loss;
+  }
+
+  /**
+   * Clip all gradients by global norm to prevent exploding gradients
+   */
+  _clipGradients(maxNorm) {
+    // Collect all gradient matrices
+    const grads = [this.dEmbedding, this.dOutputW, this.dOutputB];
+    for (const block of this.blocks) {
+      grads.push(block.attn.dWq, block.attn.dWk, block.attn.dWv, block.attn.dWo);
+      grads.push(block.ffn.dW1, block.ffn.db1, block.ffn.dW2, block.ffn.db2);
+    }
+    
+    // Compute global norm
+    let totalNormSq = 0;
+    for (const g of grads) {
+      for (let i = 0; i < g.rows; i++) {
+        for (let j = 0; j < g.cols; j++) {
+          totalNormSq += g.get(i, j) ** 2;
+        }
+      }
+    }
+    const totalNorm = Math.sqrt(totalNormSq);
+    
+    // Scale gradients if norm exceeds max
+    if (totalNorm > maxNorm) {
+      const scale = maxNorm / totalNorm;
+      for (const g of grads) {
+        for (let i = 0; i < g.rows; i++) {
+          for (let j = 0; j < g.cols; j++) {
+            g.set(i, j, g.get(i, j) * scale);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Train on text data for multiple epochs
+   * @param {number[]} allTokens - Full tokenized text
+   * @param {Object} opts - Training options
+   * @returns {{ losses: number[], finalLoss: number }}
+   */
+  train(allTokens, { epochs = 1000, windowSize = 16, lr = 0.001, clipNorm = 1.0, logEvery = 100 } = {}) {
+    const losses = [];
+    for (let i = 0; i < epochs; i++) {
+      const start = Math.floor(Math.random() * (allTokens.length - windowSize));
+      const window = allTokens.slice(start, start + windowSize);
+      const loss = this.trainStep(window, lr, clipNorm);
+      losses.push(loss);
+      if (logEvery > 0 && i % logEvery === 0) {
+        const avg = losses.slice(-logEvery).reduce((a, b) => a + b) / Math.min(logEvery, losses.length);
+        console.log(`Step ${i}: loss = ${avg.toFixed(4)}`);
+      }
+    }
+    const finalLoss = losses.slice(-100).reduce((a, b) => a + b) / Math.min(100, losses.length);
+    return { losses, finalLoss };
   }
 
   /**
