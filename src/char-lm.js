@@ -464,9 +464,10 @@ export class CharLM {
    * @param {number[]} prompt - Starting token IDs
    * @param {number} maxTokens - How many tokens to generate
    * @param {number} temperature - Sampling temperature (1.0 = normal, <1 = sharper, >1 = more random)
+   * @param {Object} opts - Additional options: topK, topP (nucleus sampling)
    * @returns {number[]} Generated token IDs
    */
-  generate(prompt, maxTokens = 50, temperature = 0.8) {
+  generate(prompt, maxTokens = 50, temperature = 0.8, { topK = 0, topP = 0 } = {}) {
     const tokens = [...prompt];
     
     for (let i = 0; i < maxTokens; i++) {
@@ -476,9 +477,30 @@ export class CharLM {
       
       // Get logits for last position
       const lastRow = logits.rows - 1;
-      const lastLogits = [];
+      let lastLogits = [];
       for (let v = 0; v < this.vocabSize; v++) {
         lastLogits.push(logits.get(lastRow, v) / temperature);
+      }
+      
+      // Top-K filtering: keep only K highest logits
+      if (topK > 0 && topK < this.vocabSize) {
+        const indexed = lastLogits.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]);
+        const threshold = indexed[topK - 1][0];
+        lastLogits = lastLogits.map(v => v >= threshold ? v : -1e9);
+      }
+      
+      // Top-P (nucleus) filtering: keep smallest set whose cumulative prob >= topP
+      if (topP > 0 && topP < 1) {
+        const probs = softmax(lastLogits);
+        const indexed = probs.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]);
+        let cumSum = 0;
+        const keep = new Set();
+        for (const [p, idx] of indexed) {
+          cumSum += p;
+          keep.add(idx);
+          if (cumSum >= topP) break;
+        }
+        lastLogits = lastLogits.map((v, i) => keep.has(i) ? v : -1e9);
       }
       
       // Sample from softmax distribution
