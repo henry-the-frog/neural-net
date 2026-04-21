@@ -67,6 +67,12 @@ A complete implementation of modern Large Language Model components, from tokeni
   - INT4 group: ~16x compression, configurable group size
   - 10 tests
 
+- **`kv-cache-compression.js`** — KV-Cache Compression
+  - INT8 per-vector quantization of cached K/V
+  - >3x memory reduction with MAE < 0.1
+  - Eviction support for bounded cache
+  - 6 tests
+
 ### Training & Fine-Tuning
 - **`simple-train.js`** — SPSA Training
   - Gradient-free optimization via parameter perturbation
@@ -96,7 +102,7 @@ Text → BPE Tokenizer → Token IDs → ModernDecoder → Logits → Sampling �
 - 6 integration tests
 
 ## Test Count
-- **152 tests** across 14 new test files
+- **158 tests** across 15 new test files
 - All components independently tested and verified
 
 ## Architecture Diagram
