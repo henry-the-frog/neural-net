@@ -12,6 +12,7 @@
 
 import { Matrix } from './matrix.js';
 import { GroupedQueryAttention } from './gqa-attention.js';
+import { sample as sampleToken, applyRepetitionPenalty } from './sampling.js';
 
 /**
  * RMSNorm — Root Mean Square Layer Normalization
@@ -257,27 +258,44 @@ export class ModernDecoder {
   }
 
   /**
-   * Generate tokens autoregressively using greedy decoding.
+   * Generate tokens autoregressively.
    * @param {number[]} prompt - initial token IDs
    * @param {number} maxNewTokens - max tokens to generate
+   * @param {object} [opts] - sampling options
+   * @param {number} [opts.temperature=1.0] - temperature scaling
+   * @param {number} [opts.topK=0] - top-k filter (0 = disabled)
+   * @param {number} [opts.topP=1.0] - top-p filter (1.0 = disabled)
+   * @param {boolean} [opts.greedy=true] - greedy decoding
+   * @param {number} [opts.repetitionPenalty=1.0] - repetition penalty
+   * @param {number} [opts.stopToken=-1] - stop generation on this token
    * @returns {number[]} generated token IDs (including prompt)
    */
-  generate(prompt, maxNewTokens = 20) {
+  generate(prompt, maxNewTokens = 20, opts = {}) {
+    const { temperature = 1.0, topK = 0, topP = 1.0, greedy = true,
+            repetitionPenalty = 1.0, stopToken = -1 } = opts;
+
     this.clearCache();
     const tokens = [...prompt];
 
     // Process prompt (prefill)
     const logits = this.forward([tokens], true);
 
-    // Greedy: pick argmax of last position
-    let nextToken = argmaxSlice(logits, 0, (tokens.length - 1) * this.vocabSize, this.vocabSize);
+    // Get logits for last position
+    let lastLogits = extractLogits(logits, 0, (tokens.length - 1) * this.vocabSize, this.vocabSize);
+    if (repetitionPenalty !== 1.0) lastLogits = applyRepetitionPenalty(lastLogits, tokens, repetitionPenalty);
+    let nextToken = sampleToken(Array.from(lastLogits), { temperature, topK, topP, greedy });
     tokens.push(nextToken);
+
+    if (nextToken === stopToken) return tokens;
 
     // Decode one token at a time
     for (let i = 1; i < maxNewTokens; i++) {
       const stepLogits = this.forward([[nextToken]], true);
-      nextToken = argmaxSlice(stepLogits, 0, 0, this.vocabSize);
+      let stepArr = extractLogits(stepLogits, 0, 0, this.vocabSize);
+      if (repetitionPenalty !== 1.0) stepArr = applyRepetitionPenalty(stepArr, tokens, repetitionPenalty);
+      nextToken = sampleToken(Array.from(stepArr), { temperature, topK, topP, greedy });
       tokens.push(nextToken);
+      if (nextToken === stopToken) break;
     }
 
     return tokens;
@@ -326,4 +344,10 @@ function argmaxSlice(mat, row, start, len) {
     if (v > maxVal) { maxVal = v; maxIdx = i; }
   }
   return maxIdx;
+}
+
+function extractLogits(mat, row, start, len) {
+  const result = new Float64Array(len);
+  for (let i = 0; i < len; i++) result[i] = mat.get(row, start + i);
+  return result;
 }

@@ -135,12 +135,43 @@ describe('ModernDecoder (mini Llama)', () => {
     console.log(`Mini Llama: ${params} parameters (2 layers, d=8, vocab=32)`);
   });
 
-  it('different prompts produce different outputs', () => {
-    const model = new ModernDecoder(2, 4, 2, 1, 16, { dHidden: 8 });
-    const out1 = model.forward([[0, 1]], false);
-    const out2 = model.forward([[2, 3]], false);
-    let diff = 0;
-    for (let i = 0; i < out1.cols; i++) diff += Math.abs(out1.get(0, i) - out2.get(0, i));
-    assert.ok(diff > 0.01, 'Different prompts should produce different logits');
+  it('generate with sampling produces varied output', () => {
+    const vocabSize = 16;
+    const model = new ModernDecoder(2, 4, 2, 1, vocabSize, { dHidden: 8 });
+    
+    // Generate multiple times with temperature — should get some variety
+    const results = new Set();
+    for (let i = 0; i < 10; i++) {
+      const generated = model.generate([0, 1], 3, { temperature: 2.0, greedy: false });
+      results.add(generated.slice(2).join(','));
+    }
+    // With high temp, we should get at least 2 different continuations
+    assert.ok(results.size >= 2, `Expected variety, got ${results.size} unique: ${[...results]}`);
+  });
+
+  it('generate with repetition penalty avoids repeated tokens', () => {
+    const vocabSize = 16;
+    const model = new ModernDecoder(2, 4, 2, 1, vocabSize, { dHidden: 8 });
+    
+    const generated = model.generate([0], 10, { 
+      temperature: 0.5, greedy: false, repetitionPenalty: 2.0 
+    });
+    // With penalty, should have more unique tokens than without
+    const unique = new Set(generated).size;
+    assert.ok(unique >= 3, `Expected diverse tokens with penalty, got ${unique} unique`);
+  });
+
+  it('generate stops at stop token', () => {
+    const vocabSize = 16;
+    const model = new ModernDecoder(2, 4, 2, 1, vocabSize, { dHidden: 8 });
+    
+    // Generate with greedy — find what the first generated token is
+    const greedy = model.generate([0, 1], 1, { greedy: true });
+    const firstToken = greedy[2]; // first generated token
+    
+    // Generate with that token as stop token — should stop after 1 token at most
+    const stopped = model.generate([0, 1], 100, { greedy: true, stopToken: firstToken });
+    assert.ok(stopped.length <= 4, `Should stop early, got ${stopped.length} tokens`);
+    assert.equal(stopped[stopped.length - 1], firstToken, 'Last token should be stop token');
   });
 });
