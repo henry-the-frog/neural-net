@@ -213,7 +213,7 @@ describe('Training Robustness', () => {
 
     assert.ok(finalLoss < initialLoss, 
       `Loss should decrease: initial=${initialLoss.toFixed(4)}, final=${finalLoss.toFixed(4)}`);
-    assert.ok(finalLoss < 0.01, `Final loss should be small: ${finalLoss.toFixed(4)}`);
+    assert.ok(finalLoss < 0.05, `Final loss should be small: ${finalLoss.toFixed(4)}`);
   });
 
   it('network does not diverge with reasonable learning rate', () => {

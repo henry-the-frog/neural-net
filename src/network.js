@@ -536,24 +536,25 @@ export class Network {
         }
         case 'MixtureOfExperts': {
           if (!MixtureOfExperts) throw new Error('MixtureOfExperts not available for deserialization');
-          layer = new MixtureOfExperts(d.inputSize, d.numExperts, d.hiddenSize, d.outputSize);
-          // Restore gate weights
-          if (d.gateWeightShape && layer.gate) {
-            layer.gate.weights = new Matrix(d.gateWeightShape[0], d.gateWeightShape[1], new Float64Array(d.gateWeights));
-            layer.gate.biases = new Matrix(d.gateBiasShape[0], d.gateBiasShape[1], new Float64Array(d.gateBiases));
+          layer = new MixtureOfExperts(d.dModel, d.numExperts, d.topK, d.dHidden);
+          // Restore router weights
+          if (d.routerWeightShape && layer.routerW) {
+            layer.routerW = new Matrix(d.routerWeightShape[0], d.routerWeightShape[1], new Float64Array(d.routerWeights));
+            layer.routerB = new Matrix(d.routerBiasShape[0], d.routerBiasShape[1], new Float64Array(d.routerBiases));
           }
-          // Restore expert weights
+          // Restore expert weights (SwiGLU FFNs with W1, W2, W3)
           if (d.experts && layer.experts) {
             for (let i = 0; i < Math.min(d.experts.length, layer.experts.length); i++) {
               const ed = d.experts[i];
               const expert = layer.experts[i];
-              if (ed.fc1) {
-                expert.fc1.weights = new Matrix(ed.fc1.weightShape[0], ed.fc1.weightShape[1], new Float64Array(ed.fc1.weights));
-                expert.fc1.biases = new Matrix(ed.fc1.biasShape[0], ed.fc1.biasShape[1], new Float64Array(ed.fc1.biases));
+              if (ed.W1) {
+                expert.W1 = new Matrix(ed.W1.shape[0], ed.W1.shape[1], new Float64Array(ed.W1.data));
               }
-              if (ed.fc2) {
-                expert.fc2.weights = new Matrix(ed.fc2.weightShape[0], ed.fc2.weightShape[1], new Float64Array(ed.fc2.weights));
-                expert.fc2.biases = new Matrix(ed.fc2.biasShape[0], ed.fc2.biasShape[1], new Float64Array(ed.fc2.biases));
+              if (ed.W2) {
+                expert.W2 = new Matrix(ed.W2.shape[0], ed.W2.shape[1], new Float64Array(ed.W2.data));
+              }
+              if (ed.W3) {
+                expert.W3 = new Matrix(ed.W3.shape[0], ed.W3.shape[1], new Float64Array(ed.W3.data));
               }
             }
           }
@@ -681,36 +682,35 @@ export class Network {
         // Serialize residual weights (nested array [inputSize][outputSize])
         info.residualWeights = layer.residualWeights.map(row => Array.from(row));
       } else if (layer.constructor.name === 'MixtureOfExperts') {
-        info.inputSize = layer.inputSize;
+        info.dModel = layer.dModel;
         info.numExperts = layer.numExperts || layer.experts?.length;
-        info.hiddenSize = layer.experts?.[0]?.fc1?.outputSize;
+        info.topK = layer.topK;
+        info.dHidden = layer.experts?.[0]?.dHidden;
         info.outputSize = layer.outputSize;
-        // Serialize gate weights
-        if (layer.gate) {
-          info.gateWeights = Array.from(layer.gate.weights.data);
-          info.gateWeightShape = [layer.gate.weights.rows, layer.gate.weights.cols];
-          info.gateBiases = Array.from(layer.gate.biases.data);
-          info.gateBiasShape = [layer.gate.biases.rows, layer.gate.biases.cols];
+        // Serialize router weights
+        if (layer.routerW) {
+          info.routerWeights = Array.from(layer.routerW.data);
+          info.routerWeightShape = [layer.routerW.rows, layer.routerW.cols];
+          info.routerBiases = Array.from(layer.routerB.data);
+          info.routerBiasShape = [layer.routerB.rows, layer.routerB.cols];
         }
-        // Serialize expert networks (each has fc1 and fc2 Dense layers)
+        // Serialize expert networks (SwiGLU FFNs with W1, W2, W3)
         if (layer.experts) {
           info.experts = layer.experts.map(expert => ({
-            fc1: {
-              weights: Array.from(expert.fc1.weights.data),
-              weightShape: [expert.fc1.weights.rows, expert.fc1.weights.cols],
-              biases: Array.from(expert.fc1.biases.data),
-              biasShape: [expert.fc1.biases.rows, expert.fc1.biases.cols],
-              inputSize: expert.fc1.inputSize,
-              outputSize: expert.fc1.outputSize,
+            W1: {
+              data: Array.from(expert.W1.data),
+              shape: [expert.W1.rows, expert.W1.cols],
             },
-            fc2: {
-              weights: Array.from(expert.fc2.weights.data),
-              weightShape: [expert.fc2.weights.rows, expert.fc2.weights.cols],
-              biases: Array.from(expert.fc2.biases.data),
-              biasShape: [expert.fc2.biases.rows, expert.fc2.biases.cols],
-              inputSize: expert.fc2.inputSize,
-              outputSize: expert.fc2.outputSize,
+            W2: {
+              data: Array.from(expert.W2.data),
+              shape: [expert.W2.rows, expert.W2.cols],
             },
+            W3: {
+              data: Array.from(expert.W3.data),
+              shape: [expert.W3.rows, expert.W3.cols],
+            },
+            dModel: expert.dModel,
+            dHidden: expert.dHidden,
           }));
         }
       }

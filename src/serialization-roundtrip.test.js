@@ -219,7 +219,7 @@ describe('Serialization Round-trip: KANLayer', () => {
 
 describe('Serialization Round-trip: MixtureOfExperts', () => {
   it('round-trip preserves MoE gate and expert weights', () => {
-    const moe = new MixtureOfExperts(4, 3, 8, 2);
+    const moe = new MixtureOfExperts(4, 8, 2, 3);
     
     const net = new Network();
     net.layers.push(moe);
