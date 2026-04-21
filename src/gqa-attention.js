@@ -4,6 +4,7 @@
 // KV-cache stores computed K,V for past tokens to avoid recomputation during generation.
 
 import { Matrix } from './matrix.js';
+import { precomputeRoPE, applyRoPEToSequence } from './rope.js';
 
 /**
  * Softmax over rows — each row is independently softmaxed.
@@ -47,7 +48,7 @@ function extractCols(mat, startCol, numCols) {
  * @param {number} numKVHeads - number of key/value heads (must divide numQHeads evenly)
  */
 export class GroupedQueryAttention {
-  constructor(dModel, numQHeads, numKVHeads, { causal = true } = {}) {
+  constructor(dModel, numQHeads, numKVHeads, { causal = true, useRoPE = false, maxSeqLen = 2048, ropeBase = 10000 } = {}) {
     if (dModel % numQHeads !== 0) throw new Error('dModel must be divisible by numQHeads');
     if (numQHeads % numKVHeads !== 0) throw new Error('numQHeads must be divisible by numKVHeads');
 
@@ -73,6 +74,10 @@ export class GroupedQueryAttention {
 
     this.outputSize = dModel;
     this._cache = null; // KV-cache: { K: Matrix, V: Matrix } per batch
+    
+    // RoPE support
+    this.useRoPE = useRoPE;
+    this._rope = useRoPE ? precomputeRoPE(this.headDim, maxSeqLen, ropeBase) : null;
   }
 
   /**
@@ -135,8 +140,21 @@ export class GroupedQueryAttention {
         const Kh = extractCols(K, kvOffset, this.headDim);     // [totalLen, headDim]
         const Vh = extractCols(V, kvOffset, this.headDim);     // [totalLen, headDim]
 
+        // Apply RoPE to Q and K if enabled
+        let Qr = Qh, Kr = Kh;
+        if (this.useRoPE && this._rope) {
+          const cacheOffset = useCache && this._cache && this._cache[b] ?
+            this._cache[b].K.rows - K.rows : 0;
+          // Q: rotated at current positions (cacheOffset..cacheOffset+seqLen-1)
+          Qr = applyRoPEToSequence(Qh, this._rope, totalLen - seqLen);
+          // K: rotated at their actual positions (0..totalLen-1 if full, or offset for new tokens)
+          // For cached K, the cached portion is already rotated — only rotate new tokens
+          // But since we cache pre-rotation K and rotate the full thing here, just rotate all
+          Kr = applyRoPEToSequence(Kh, this._rope, 0);
+        }
+
         // Attention scores: [seqLen, totalLen]
-        const scores = Qh.dot(Kh.T()).mul(1 / Math.sqrt(this.headDim));
+        const scores = Qr.dot(Kr.T()).mul(1 / Math.sqrt(this.headDim));
 
         // Apply causal mask if needed
         if (this.causal) {

@@ -218,4 +218,60 @@ describe('GroupedQueryAttention', () => {
       assert.ok(mqa.cacheStats().memoryBytes < gqa.cacheStats().memoryBytes);
     });
   });
+
+  describe('RoPE integration', () => {
+    it('GQA with RoPE produces finite output', () => {
+      const gqa = new GroupedQueryAttention(8, 4, 2, { causal: true, useRoPE: true });
+      const input = Matrix.random(1, 24); // batch=1, seqLen=3
+      const output = gqa.forward(input);
+      assert.equal(output.rows, 1);
+      assert.equal(output.cols, 24);
+      for (let i = 0; i < output.cols; i++)
+        assert.ok(isFinite(output.get(0, i)), `NaN/Inf at col ${i}`);
+    });
+
+    it('RoPE changes output compared to non-RoPE (position-dependent)', () => {
+      const withRoPE = new GroupedQueryAttention(8, 4, 2, { causal: true, useRoPE: true });
+      const withoutRoPE = new GroupedQueryAttention(8, 4, 2, { causal: true, useRoPE: false });
+      withoutRoPE.Wq = withRoPE.Wq; withoutRoPE.Wk = withRoPE.Wk;
+      withoutRoPE.Wv = withRoPE.Wv; withoutRoPE.Wo = withRoPE.Wo;
+      withoutRoPE.bq = withRoPE.bq; withoutRoPE.bk = withRoPE.bk;
+      withoutRoPE.bv = withRoPE.bv; withoutRoPE.bo = withRoPE.bo;
+
+      const input = Matrix.random(1, 48); // 6 tokens — more positions = more rotation difference
+      const out1 = withRoPE.forward(input);
+      const out2 = withoutRoPE.forward(input);
+
+      let diff = 0;
+      for (let i = 0; i < out1.cols; i++) diff += Math.abs(out1.get(0, i) - out2.get(0, i));
+      assert.ok(diff > 1e-6, `RoPE should produce different output (diff=${diff})`);
+    });
+
+    it('KV-cache with RoPE: incremental matches full sequence', () => {
+      const gqa = new GroupedQueryAttention(4, 2, 1, { causal: true, useRoPE: true });
+      const fullInput = Matrix.random(1, 12); // 3 tokens
+      const fullOut = gqa.forward(fullInput);
+
+      gqa.clearCache();
+      const t0 = new Matrix(1, 4);
+      const t1 = new Matrix(1, 4);
+      const t2 = new Matrix(1, 4);
+      for (let d = 0; d < 4; d++) {
+        t0.set(0, d, fullInput.get(0, d));
+        t1.set(0, d, fullInput.get(0, 4 + d));
+        t2.set(0, d, fullInput.get(0, 8 + d));
+      }
+
+      const out0 = gqa.forward(t0, true);
+      const out1 = gqa.forward(t1, true);
+      const out2 = gqa.forward(t2, true);
+
+      for (let d = 0; d < 4; d++) {
+        assert.ok(
+          Math.abs(out0.get(0, d) - fullOut.get(0, d)) < 1e-4,
+          `Token 0 mismatch at d=${d}: ${out0.get(0, d)} vs ${fullOut.get(0, d)}`
+        );
+      }
+    });
+  });
 });
