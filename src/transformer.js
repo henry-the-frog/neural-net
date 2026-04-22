@@ -3,6 +3,7 @@
 import { Matrix } from './matrix.js';
 import { Dense } from './layer.js';
 import { MultiHeadAttention } from './attention.js';
+import { MultiHeadFlashAttention } from './multi-head-flash-attention.js';
 
 /**
  * Sinusoidal Positional Encoding (Vaswani et al. 2017)
@@ -178,13 +179,26 @@ export class LayerNorm {
  * Self-attention + residual + layer norm + feedforward + residual + layer norm
  */
 export class TransformerEncoderBlock {
-  constructor(dModel, numHeads, dFF = null) {
+  /**
+   * @param {number} dModel
+   * @param {number} numHeads
+   * @param {number} [dFF]
+   * @param {Object} [opts]
+   * @param {'standard'|'flash'} [opts.attention='standard'] — attention implementation
+   * @param {number} [opts.blockSize=32] — flash attention block size
+   * @param {boolean} [opts.causal=false] — causal mask
+   */
+  constructor(dModel, numHeads, dFF = null, { attention = 'standard', blockSize = 32, causal = false } = {}) {
     this.dModel = dModel;
-    this.dFF = dFF || dModel * 4; // Standard transformer: 4x expansion
+    this.dFF = dFF || dModel * 4;
     this.outputSize = dModel;
     this.training = true;
     
-    this.attention = new MultiHeadAttention(dModel, numHeads);
+    if (attention === 'flash') {
+      this.attention = new MultiHeadFlashAttention(dModel, numHeads, { blockSize, causal });
+    } else {
+      this.attention = new MultiHeadAttention(dModel, numHeads);
+    }
     this.norm1 = new LayerNorm(dModel);
     this.norm2 = new LayerNorm(dModel);
     
