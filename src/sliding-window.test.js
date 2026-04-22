@@ -16,7 +16,7 @@ describe('Sliding Window Attention', () => {
       const full = standardAttention(Q, K, V, true);
       const swa = slidingWindowAttention(Q, K, V, N, true);
 
-      assertClose(full.output, swa.output, 1e-6, 'Full window should match full attention');
+      assertClose(full, swa.output, 1e-6, 'Full window should match full attention');
     });
 
     it('window=1: each token only attends to itself', () => {
@@ -46,14 +46,14 @@ describe('Sliding Window Attention', () => {
       // First W positions should match (they see the same context)
       for (let i = 0; i < W; i++)
         for (let dd = 0; dd < d; dd++)
-          assert.ok(Math.abs(full.output.get(i, dd) - swa.output.get(i, dd)) < 1e-6,
+          assert.ok(Math.abs(full.get(i, dd) - swa.output.get(i, dd)) < 1e-6,
             `First W positions should match at (${i},${dd})`);
 
       // Later positions should differ (SWA can't see distant tokens)
       let diff = 0;
       for (let i = W; i < N; i++)
         for (let dd = 0; dd < d; dd++)
-          diff += Math.abs(full.output.get(i, dd) - swa.output.get(i, dd));
+          diff += Math.abs(full.get(i, dd) - swa.output.get(i, dd));
       assert.ok(diff > 0.01, 'Later positions should differ from full attention');
     });
 
@@ -77,13 +77,13 @@ describe('Sliding Window Attention', () => {
       const K = Matrix.random(N, d);
       const V = Matrix.random(N, d);
 
-      const full = standardAttention(Q, K, V, true);
       const swa = slidingWindowAttention(Q, K, V, W, true);
 
-      console.log(`  Full: ${full.stats.peakMemory} elements`);
-      console.log(`  SWA: ${swa.stats.peakMemory} elements (${(swa.stats.peakMemory/full.stats.peakMemory*100).toFixed(0)}%)`);
+      const fullPeakMemory = N * N; // Full attention materializes N×N matrix
+      console.log(`  Full: ${fullPeakMemory} elements`);
+      console.log(`  SWA: ${swa.stats.peakMemory} elements (${(swa.stats.peakMemory/fullPeakMemory*100).toFixed(0)}%)`);
 
-      assert.ok(swa.stats.peakMemory < full.stats.peakMemory);
+      assert.ok(swa.stats.peakMemory < fullPeakMemory);
     });
   });
 });
