@@ -125,3 +125,7 @@ export function verifyRelativeProperty(q, k, freqTable, posM, posN) {
   }
   return dot;
 }
+
+// Aliases for backward compatibility with gqa-attention.js
+export { precomputeFreqs as precomputeRoPE };
+export { applyRoPE as applyRoPEToSequence };
