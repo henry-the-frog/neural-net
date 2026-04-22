@@ -1,83 +1,227 @@
-// LR Scheduler wrappers with standard API: constructor(baseLR, ...), getLR(step)
-import { StepDecay, ExponentialDecay, CosineAnnealing, LinearWarmup, CyclicLR as CyclicLRBase, WarmupCosine, ConstantLR, LinearDecay, createScheduler } from './scheduler.js';
+// lr-scheduler.js — Learning Rate Schedulers for neural network training
+//
+// Provides composable LR scheduling policies:
+// - ConstantLR: Fixed learning rate
+// - LinearWarmup: Ramp from 0 to lr_max over warmup steps
+// - CosineDecay: Cosine annealing from lr_max to lr_min
+// - StepDecay: Multiply by gamma at milestone steps
+// - OneCycle: Ramp up then cosine/linear decay (Smith 2018)
+// - WarmupScheduler: Compose warmup with any base scheduler
+//
+// Usage:
+//   const scheduler = new WarmupScheduler(
+//     new CosineDecay(0.001, 10000, 1e-6),
+//     warmupSteps: 1000
+//   );
+//   for (let step = 0; step < totalSteps; step++) {
+//     const lr = scheduler.step();
+//     optimizer.updateWeights(lr);
+//   }
 
-export class StepLR {
-  constructor(baseLR = 0.1, stepSize = 10, gamma = 0.5) {
-    this.baseLR = baseLR;
-    this.stepSize = stepSize;
-    this.gamma = gamma;
+/**
+ * Constant learning rate.
+ */
+export class ConstantLR {
+  constructor(lr) {
+    this.lr = lr;
+    this._step = 0;
   }
-  getLR(step) {
-    const decays = Math.floor(step / this.stepSize);
-    return this.baseLR * Math.pow(this.gamma, decays);
+  
+  step() {
+    this._step++;
+    return this.lr;
   }
+  
+  getLR() { return this.lr; }
+  getStep() { return this._step; }
+  reset() { this._step = 0; }
 }
 
-export class ExponentialLR {
-  constructor(baseLR = 0.1, gamma = 0.99) {
-    this.baseLR = baseLR;
-    this.gamma = gamma;
-  }
-  getLR(step) {
-    return this.baseLR * Math.pow(this.gamma, step);
-  }
-}
-
-export class CosineAnnealingLR {
-  constructor(baseLR = 0.1, totalSteps = 100, minLR = 0) {
-    this.baseLR = baseLR;
+/**
+ * Cosine annealing learning rate decay.
+ * LR = lrMin + 0.5 * (lrMax - lrMin) * (1 + cos(π * t / T))
+ * where t = current step, T = total steps
+ */
+export class CosineDecay {
+  constructor(lrMax, totalSteps, lrMin = 0) {
+    this.lrMax = lrMax;
+    this.lrMin = lrMin;
     this.totalSteps = totalSteps;
-    this.minLR = minLR;
+    this._step = 0;
   }
-  getLR(step) {
-    return this.minLR + (this.baseLR - this.minLR) * 0.5 * (1 + Math.cos(Math.PI * step / this.totalSteps));
+  
+  step() {
+    const t = Math.min(this._step, this.totalSteps);
+    const lr = this.lrMin + 0.5 * (this.lrMax - this.lrMin) * (1 + Math.cos(Math.PI * t / this.totalSteps));
+    this._step++;
+    return lr;
   }
+  
+  getLR() {
+    const t = Math.min(this._step, this.totalSteps);
+    return this.lrMin + 0.5 * (this.lrMax - this.lrMin) * (1 + Math.cos(Math.PI * t / this.totalSteps));
+  }
+  
+  getStep() { return this._step; }
+  reset() { this._step = 0; }
 }
 
-export class WarmupLR {
-  constructor(baseLR = 0.1, warmupSteps = 10) {
-    this.baseLR = baseLR;
+/**
+ * Step decay: multiply LR by gamma at each milestone.
+ * milestones: array of step numbers where decay occurs
+ */
+export class StepDecay {
+  constructor(lrInit, milestones, gamma = 0.1) {
+    this.lrInit = lrInit;
+    this.milestones = [...milestones].sort((a, b) => a - b);
+    this.gamma = gamma;
+    this._step = 0;
+  }
+  
+  step() {
+    const lr = this.getLR();
+    this._step++;
+    return lr;
+  }
+  
+  getLR() {
+    let lr = this.lrInit;
+    for (const m of this.milestones) {
+      if (this._step >= m) lr *= this.gamma;
+      else break;
+    }
+    return lr;
+  }
+  
+  getStep() { return this._step; }
+  reset() { this._step = 0; }
+}
+
+/**
+ * Linear warmup: ramp from 0 to lrMax over warmupSteps.
+ * After warmup, stays at lrMax.
+ */
+export class LinearWarmup {
+  constructor(lrMax, warmupSteps) {
+    this.lrMax = lrMax;
     this.warmupSteps = warmupSteps;
+    this._step = 0;
   }
-  getLR(step) {
-    if (step >= this.warmupSteps) return this.baseLR;
-    return this.baseLR * (step + 1) / this.warmupSteps;
+  
+  step() {
+    const lr = this.getLR();
+    this._step++;
+    return lr;
   }
+  
+  getLR() {
+    if (this._step >= this.warmupSteps) return this.lrMax;
+    return this.lrMax * (this._step / this.warmupSteps);
+  }
+  
+  getStep() { return this._step; }
+  reset() { this._step = 0; }
 }
 
-export class CyclicLR {
-  constructor(baseLR = 0.001, maxLR = 0.1, stepSize = 10) {
-    this.baseLR = baseLR;
-    this.maxLR = maxLR;
-    this.stepSize = stepSize;
+/**
+ * Compose linear warmup with any base scheduler.
+ * During warmup: LR ramps from 0 to base.getLR().
+ * After warmup: delegates to base scheduler.
+ */
+export class WarmupScheduler {
+  constructor(baseScheduler, warmupSteps) {
+    this.base = baseScheduler;
+    this.warmupSteps = warmupSteps;
+    this._step = 0;
   }
-  getLR(step) {
-    const cycle = Math.floor(step / (2 * this.stepSize));
-    const x = Math.abs(step / this.stepSize - 2 * cycle - 1);
-    return this.baseLR + (this.maxLR - this.baseLR) * Math.max(0, 1 - x);
+  
+  step() {
+    const baseLR = this.base.step();
+    const lr = this._step < this.warmupSteps
+      ? baseLR * (this._step / this.warmupSteps)
+      : baseLR;
+    this._step++;
+    return lr;
   }
+  
+  getLR() {
+    const baseLR = this.base.getLR();
+    return this._step < this.warmupSteps
+      ? baseLR * (this._step / this.warmupSteps)
+      : baseLR;
+  }
+  
+  getStep() { return this._step; }
+  reset() { this._step = 0; this.base.reset(); }
 }
 
-export class OneCycleLR {
-  constructor(maxLR = 0.1, totalSteps = 100, divFactor = 25, finalDivFactor = 1e4) {
-    this.maxLR = maxLR;
+/**
+ * One-cycle learning rate policy (Smith 2018).
+ * Phase 1 (0 → pctStart): linear ramp from lrInit/divFactor to lrMax
+ * Phase 2 (pctStart → 1): cosine decay from lrMax to lrInit/finalDivFactor
+ */
+export class OneCycle {
+  constructor(lrMax, totalSteps, {
+    pctStart = 0.3,
+    divFactor = 25,
+    finalDivFactor = 10000,
+  } = {}) {
+    this.lrMax = lrMax;
     this.totalSteps = totalSteps;
+    this.pctStart = pctStart;
     this.divFactor = divFactor;
     this.finalDivFactor = finalDivFactor;
-    this.initialLR = maxLR / divFactor;
-    this.minLR = maxLR / finalDivFactor;
+    this.lrInit = lrMax / divFactor;
+    this.lrFinal = lrMax / finalDivFactor;
+    this.warmupSteps = Math.floor(totalSteps * pctStart);
+    this._step = 0;
   }
-  getLR(step) {
-    const pct = step / this.totalSteps;
-    if (pct <= 0.3) {
-      // Warmup phase
-      return this.initialLR + (this.maxLR - this.initialLR) * (pct / 0.3);
+  
+  step() {
+    const lr = this.getLR();
+    this._step++;
+    return lr;
+  }
+  
+  getLR() {
+    const t = Math.min(this._step, this.totalSteps);
+    
+    if (t < this.warmupSteps) {
+      // Phase 1: linear ramp up
+      const progress = t / this.warmupSteps;
+      return this.lrInit + (this.lrMax - this.lrInit) * progress;
     } else {
-      // Cosine annealing phase
-      const annealPct = (pct - 0.3) / 0.7;
-      return this.minLR + (this.maxLR - this.minLR) * 0.5 * (1 + Math.cos(Math.PI * annealPct));
+      // Phase 2: cosine decay
+      const progress = (t - this.warmupSteps) / (this.totalSteps - this.warmupSteps);
+      return this.lrFinal + 0.5 * (this.lrMax - this.lrFinal) * (1 + Math.cos(Math.PI * progress));
     }
   }
+  
+  getStep() { return this._step; }
+  reset() { this._step = 0; }
 }
 
-export { ConstantLR, LinearDecay, createScheduler };
+/**
+ * Exponential decay: LR = lrInit * decay^step
+ */
+export class ExponentialDecay {
+  constructor(lrInit, decayRate, decaySteps = 1) {
+    this.lrInit = lrInit;
+    this.decayRate = decayRate;
+    this.decaySteps = decaySteps;
+    this._step = 0;
+  }
+  
+  step() {
+    const lr = this.getLR();
+    this._step++;
+    return lr;
+  }
+  
+  getLR() {
+    return this.lrInit * Math.pow(this.decayRate, this._step / this.decaySteps);
+  }
+  
+  getStep() { return this._step; }
+  reset() { this._step = 0; }
+}
