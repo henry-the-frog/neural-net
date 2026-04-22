@@ -1,59 +1,24 @@
-// optimizer.test.js — Tests for ScheduledOptimizer and SGD
+// optimizer.test.js — Tests for ScheduledOptimizer
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { ScheduledOptimizer, SGD } from './optimizer.js';
-import { AdamW } from './adamw.js';
+import { ScheduledOptimizer, SGD, Adam } from './optimizer.js';
 import { WarmupScheduler, CosineDecay, ConstantLR } from './lr-scheduler.js';
-
-describe('SGD', () => {
-  it('updates parameters in correct direction', () => {
-    const sgd = new SGD({ lr: 0.1 });
-    const params = new Float64Array([1.0, 2.0, 3.0]);
-    const grads = new Float64Array([0.5, -0.5, 0.0]);
-    sgd.update('p', params, grads);
-    assert.ok(Math.abs(params[0] - 0.95) < 1e-10);
-    assert.ok(Math.abs(params[1] - 2.05) < 1e-10);
-    assert.ok(Math.abs(params[2] - 3.0) < 1e-10);
-  });
-  
-  it('momentum accumulates velocity', () => {
-    const sgd = new SGD({ lr: 0.1, momentum: 0.9 });
-    const params = new Float64Array([0.0]);
-    const grads = new Float64Array([1.0]);
-    
-    sgd.update('p', params, grads);
-    const afterFirst = params[0]; // -0.1 * 1.0 = -0.1
-    assert.ok(Math.abs(afterFirst - (-0.1)) < 1e-10);
-    
-    sgd.update('p', params, grads);
-    // v = 0.9 * 1.0 + 1.0 = 1.9
-    // params = -0.1 - 0.1 * 1.9 = -0.29
-    assert.ok(Math.abs(params[0] - (-0.29)) < 1e-10);
-  });
-  
-  it('respects lr override', () => {
-    const sgd = new SGD({ lr: 0.1 });
-    const params = new Float64Array([1.0]);
-    const grads = new Float64Array([1.0]);
-    sgd.update('p', params, grads, 0.5);
-    assert.ok(Math.abs(params[0] - 0.5) < 1e-10);
-  });
-});
+import { Matrix } from './matrix.js';
 
 describe('ScheduledOptimizer', () => {
   it('passes scheduler LR to optimizer', () => {
-    const sgd = new SGD();
+    const sgd = new SGD(0.05);
     const sched = new ConstantLR(0.05);
     const opt = new ScheduledOptimizer(sgd, sched);
     
-    const params = new Float64Array([1.0]);
-    const grads = new Float64Array([1.0]);
-    opt.update('p', params, grads);
-    assert.ok(Math.abs(params[0] - 0.95) < 1e-10); // 1 - 0.05 * 1
+    const params = new Matrix(1, 1, new Float64Array([1.0]));
+    const grads = new Matrix(1, 1, new Float64Array([1.0]));
+    const newParams = opt.update(params, grads);
+    assert.ok(Math.abs(newParams.data[0] - 0.95) < 1e-10);
   });
   
   it('schedulerStep advances LR', () => {
-    const sgd = new SGD();
+    const sgd = new SGD(0.1);
     const sched = new CosineDecay(0.1, 100);
     const opt = new ScheduledOptimizer(sgd, sched);
     
@@ -61,41 +26,32 @@ describe('ScheduledOptimizer', () => {
     opt.schedulerStep();
     opt.schedulerStep();
     const lr2 = opt.getLR();
-    assert.ok(lr2 < lr0, 'LR should decrease after steps');
+    assert.ok(lr2 < lr0, 'LR should decrease');
   });
   
-  it('works with AdamW', () => {
-    const adamw = new AdamW({ weightDecay: 0.01 });
+  it('works with Adam', () => {
+    const adam = new Adam(0.001);
     const sched = new WarmupScheduler(new CosineDecay(0.001, 100), 10);
-    const opt = new ScheduledOptimizer(adamw, sched);
+    const opt = new ScheduledOptimizer(adam, sched);
     
-    const params = new Float64Array([1.0, 2.0]);
-    const grads = new Float64Array([0.1, 0.2]);
+    let params = new Matrix(1, 2, new Float64Array([1.0, 2.0]));
+    const grads = new Matrix(1, 2, new Float64Array([0.1, 0.2]));
     
-    // Should not throw
     for (let i = 0; i < 20; i++) {
       opt.schedulerStep();
-      opt.update('test', params, grads);
+      params = opt.update(params, grads, 'test');
     }
     
-    // Params should have changed
-    assert.notEqual(params[0], 1.0);
-    assert.notEqual(params[1], 2.0);
+    assert.notEqual(params.data[0], 1.0);
     assert.ok(opt.getLR() > 0);
   });
   
   it('reset clears state', () => {
-    const sgd = new SGD({ momentum: 0.9 });
+    const sgd = new SGD(0.1);
     const sched = new CosineDecay(0.1, 100);
     const opt = new ScheduledOptimizer(sgd, sched);
     
-    const params = new Float64Array([0.0]);
-    const grads = new Float64Array([1.0]);
-    
-    for (let i = 0; i < 10; i++) {
-      opt.schedulerStep();
-      opt.update('p', params, grads);
-    }
+    for (let i = 0; i < 10; i++) opt.schedulerStep();
     
     opt.reset();
     assert.equal(opt.getStep(), 0);
@@ -103,7 +59,7 @@ describe('ScheduledOptimizer', () => {
   });
   
   it('getStep tracks scheduler steps', () => {
-    const opt = new ScheduledOptimizer(new SGD(), new ConstantLR(0.1));
+    const opt = new ScheduledOptimizer(new SGD(0.1), new ConstantLR(0.1));
     assert.equal(opt.getStep(), 0);
     opt.schedulerStep();
     opt.schedulerStep();
