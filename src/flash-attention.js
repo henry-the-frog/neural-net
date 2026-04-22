@@ -439,3 +439,37 @@ export function flashAttention(Q, K, V, { blockSize = 32, causal = false } = {})
   
   return O;
 }
+
+/**
+ * Standard attention for reference/comparison.
+ * Materializes full N×N attention matrix (O(N²) memory).
+ * @param {Matrix} Q, K, V — [seqLen, d]
+ * @param {boolean} [causal=false]
+ * @returns {Matrix} — [seqLen, d]
+ */
+export function standardAttention(Q, K, V, causal = false) {
+  const n = Q.rows, d = Q.cols;
+  const scale = 1 / Math.sqrt(d);
+  const S = Q.dot(K.T()).mul(scale);
+  
+  if (causal) {
+    for (let i = 0; i < n; i++)
+      for (let j = i + 1; j < n; j++)
+        S.set(i, j, -Infinity);
+  }
+  
+  const P = new Matrix(n, n);
+  for (let i = 0; i < n; i++) {
+    let max = -Infinity;
+    for (let j = 0; j < n; j++) max = Math.max(max, S.get(i, j));
+    let sum = 0;
+    for (let j = 0; j < n; j++) {
+      const v = S.get(i, j) === -Infinity ? 0 : Math.exp(S.get(i, j) - max);
+      P.set(i, j, v);
+      sum += v;
+    }
+    if (sum > 0) for (let j = 0; j < n; j++) P.set(i, j, P.get(i, j) / sum);
+  }
+  
+  return P.dot(V);
+}
