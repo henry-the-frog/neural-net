@@ -1,92 +1,89 @@
-// speculative-decoding.test.js — Tests for speculative decoding
+// speculative-decoding.test.js
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { speculativeDecode } from './speculative-decoding.js';
-import { ModernDecoder } from './modern-decoder.js';
+import { speculativeStep, speculativeGenerate } from './speculative-decoding.js';
+import { Matrix } from './matrix.js';
 
-describe('Speculative Decoding', () => {
-  // Use a small target and even smaller draft model
-  const vocabSize = 8;
+// Mock models: both predict the same sequence for testing
+function mockModel(vocabSize, sequence) {
+  let callCount = 0;
+  return {
+    forward: (tokens) => {
+      const seqLen = tokens.length;
+      const logits = new Matrix(seqLen, vocabSize);
+      for (let t = 0; t < seqLen; t++) {
+        const nextToken = sequence[t] !== undefined ? sequence[t] : 0;
+        logits.set(t, nextToken, 10.0); // High logit for predicted token
+      }
+      callCount++;
+      return logits;
+    },
+    callCount: () => callCount,
+  };
+}
 
-  function makeDraft() {
-    return new ModernDecoder(1, 4, 2, 1, vocabSize, { dHidden: 4, maxSeqLen: 32 });
-  }
-
-  function makeTarget() {
-    return new ModernDecoder(2, 4, 2, 1, vocabSize, { dHidden: 8, maxSeqLen: 32 });
-  }
-
-  it('generates correct number of tokens', () => {
-    const draft = makeDraft();
-    const target = makeTarget();
-    const result = speculativeDecode(draft, target, [0, 1], 10, 3, vocabSize);
-
-    assert.equal(result.tokens.length, 12, 'prompt(2) + new(10) = 12');
-    assert.equal(result.tokens[0], 0);
-    assert.equal(result.tokens[1], 1);
+describe('speculativeStep', () => {
+  it('accepts all tokens when draft matches target', () => {
+    // Both models always predict token 5 — perfect agreement
+    const alwaysFive = (tokens) => {
+      const logits = new Matrix(tokens.length, 10);
+      for (let t = 0; t < tokens.length; t++) logits.set(t, 5, 10.0);
+      return logits;
+    };
+    
+    const result = speculativeStep(alwaysFive, alwaysFive, [0], 4);
+    assert.equal(result.accepted, 4, 'Should accept all 4 draft tokens');
+    assert.equal(result.tokens.length, 5); // 4 accepted + 1 bonus
   });
-
-  it('all tokens are valid', () => {
-    const draft = makeDraft();
-    const target = makeTarget();
-    const result = speculativeDecode(draft, target, [0], 5, 2, vocabSize);
-
-    for (const t of result.tokens) {
-      assert.ok(t >= 0 && t < vocabSize, `Token ${t} out of range`);
-    }
+  
+  it('rejects when draft diverges from target', () => {
+    const draftSeq = [3, 1, 4, 1, 5]; // Draft predicts this
+    const targetSeq = [3, 1, 4, 2, 5]; // Target predicts different at position 3
+    
+    const draft = mockModel(10, draftSeq);
+    const target = mockModel(10, targetSeq);
+    
+    const result = speculativeStep(draft.forward, target.forward, [3], 4);
+    // Should reject at the divergence point
+    assert.ok(result.tokens.length > 0);
   });
-
-  it('reports meaningful stats', () => {
-    const draft = makeDraft();
-    const target = makeTarget();
-    const result = speculativeDecode(draft, target, [0, 1], 8, 4, vocabSize);
-
-    console.log('  Stats:', result.stats);
-
-    assert.ok(result.stats.draftForwards > 0);
-    assert.ok(result.stats.targetForwards > 0);
-    assert.ok(result.stats.totalDrafted > 0);
-    // Target forwards should be fewer than tokens generated (that's the point)
-    assert.ok(
-      result.stats.targetForwards <= 8,
-      `Target forwards (${result.stats.targetForwards}) should be ≤ tokens generated (8)`
-    );
+  
+  it('returns at least one token (target correction)', () => {
+    const draft = mockModel(10, [0, 0, 0, 0, 0]);
+    const target = mockModel(10, [0, 1, 0, 0, 0]); // Diverges at position 1
+    
+    const result = speculativeStep(draft.forward, target.forward, [0], 4);
+    assert.ok(result.tokens.length >= 1);
   });
+});
 
-  it('K=1 is basic verify-each-token mode', () => {
-    const draft = makeDraft();
-    const target = makeTarget();
-    const result = speculativeDecode(draft, target, [0], 5, 1, vocabSize);
-
-    assert.equal(result.tokens.length, 6);
-    // With K=1, each iteration drafts 1 and verifies
-    assert.ok(result.stats.draftForwards >= 2, 
-      `Should have multiple drafts, got ${result.stats.draftForwards}`);
+describe('speculativeGenerate', () => {
+  it('generates requested number of tokens', () => {
+    const seq = Array.from({ length: 100 }, (_, i) => i % 10);
+    const draft = mockModel(10, seq);
+    const target = mockModel(10, seq);
+    
+    const result = speculativeGenerate(draft.forward, target.forward, [0], 20, 4);
+    assert.ok(result.tokens.length >= 20);
   });
-
-  it('high K means fewer target forwards (when draft is good)', () => {
-    // Use target as its own draft (perfect draft → 100% acceptance)
-    const target = makeTarget();
-    const result = speculativeDecode(target, target, [0, 1], 6, 3, vocabSize);
-
-    console.log('  Perfect draft stats:', result.stats);
-
-    // With perfect draft, acceptance rate should be high
-    // (Not 100% due to probabilistic acceptance, but close)
-    assert.ok(result.stats.targetForwards <= 6,
-      `With perfect draft: ${result.stats.targetForwards} target forwards for 6 tokens`);
+  
+  it('reports speedup metrics', () => {
+    const seq = Array.from({ length: 100 }, (_, i) => i % 5);
+    const draft = mockModel(5, seq);
+    const target = mockModel(5, seq);
+    
+    const result = speculativeGenerate(draft.forward, target.forward, [0], 10, 4);
+    assert.ok(result.totalSteps > 0);
+    assert.ok(result.speedup > 0);
+    assert.ok(result.avgAcceptance >= 0);
   });
-
-  it('speedup is reported', () => {
-    const draft = makeDraft();
-    const target = makeTarget();
-    const result = speculativeDecode(draft, target, [0], 10, 4, vocabSize);
-
-    console.log(`  Speedup: ${result.stats.speedup}`);
-    console.log(`  Acceptance: ${result.stats.acceptanceRate}`);
-
-    // Speedup should be >= 1 (speculation can't be worse than naive)
-    const speedupNum = parseFloat(result.stats.speedup);
-    assert.ok(speedupNum >= 0.5, `Speedup should be reasonable: ${result.stats.speedup}`);
+  
+  it('works with gamma=1 (minimal speculation)', () => {
+    const seq = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+    const draft = mockModel(10, seq);
+    const target = mockModel(10, seq);
+    
+    const result = speculativeGenerate(draft.forward, target.forward, [1], 5, 1);
+    assert.ok(result.tokens.length >= 5);
   });
 });

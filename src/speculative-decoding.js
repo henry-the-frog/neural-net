@@ -1,152 +1,142 @@
-// speculative-decoding.js — Speculative Decoding for LLM Inference
-// Paper: "Fast Inference from Transformers via Speculative Decoding" (Leviathan et al., 2023)
+// speculative-decoding.js — Speculative Decoding (Leviathan et al., 2022)
 //
-// Key idea: A small, fast "draft" model generates K candidate tokens.
-// The large "target" model verifies all K tokens in a single forward pass.
-// Accepted tokens are free (we got K-token throughput from 1 target forward pass).
-// Rejected tokens get re-sampled from the target distribution.
+// Speed up autoregressive generation by:
+// 1. Draft model generates γ tokens quickly (small, fast model)
+// 2. Target model verifies all γ tokens in parallel (single forward pass)
+// 3. Accept matching tokens, reject where draft diverges
 //
-// Result: generates same distribution as the target model, but faster
-// (when draft model acceptance rate is high enough).
+// Expected speedup: γ * (1 - rejection_rate) ≈ 2-3x for well-matched draft/target
+//
+// This is a generic implementation that works with any forward() function.
 
-import { softmax } from './sampling.js';
+import { Matrix } from './matrix.js';
 
 /**
- * Speculative decoding: generate tokens using draft+target model pair.
- *
- * @param {object} draft - draft model { forward(tokenIds) → logits matrix }
- * @param {object} target - target model { forward(tokenIds) → logits matrix }
- * @param {number[]} prompt - initial token IDs
- * @param {number} maxNewTokens - total new tokens to generate
- * @param {number} K - speculation length (tokens to draft per iteration)
- * @param {number} vocabSize - vocabulary size
- * @returns {{ tokens: number[], stats: object }}
+ * Speculative decoding step.
+ * 
+ * @param {Function} draftForward — draft model forward: (tokens) → logits [seqLen, vocabSize]
+ * @param {Function} targetForward — target model forward: (tokens) → logits [seqLen, vocabSize]
+ * @param {number[]} prefix — current token sequence
+ * @param {number} gamma — number of speculative tokens
+ * @param {Function} [sample] — sampling function: (logits) → tokenId
+ * @returns {{ tokens: number[], accepted: number, rejected: boolean }}
  */
-export function speculativeDecode(draft, target, prompt, maxNewTokens, K, vocabSize) {
-  const tokens = [...prompt];
-  let totalDraftForwards = 0;
-  let totalTargetForwards = 0;
-  let totalAccepted = 0;
-  let totalDrafted = 0;
-
-  while (tokens.length - prompt.length < maxNewTokens) {
-    const remaining = maxNewTokens - (tokens.length - prompt.length);
-    const specLen = Math.min(K, remaining);
-
-    // Step 1: Draft model generates K candidate tokens (greedy for simplicity)
-    const draftTokens = [];
-    const draftLogits = []; // store draft logits for each position
-
-    let draftInput = [...tokens];
-    for (let i = 0; i < specLen; i++) {
-      const logits = draft.forward([draftInput]);
-      totalDraftForwards++;
-
-      const lastPos = draftInput.length - 1;
-      const posLogits = extractPositionLogits(logits, lastPos, vocabSize);
-      draftLogits.push(posLogits);
-
-      const nextToken = argmax(posLogits);
-      draftTokens.push(nextToken);
-      draftInput = [...draftInput, nextToken];
-    }
-    totalDrafted += specLen;
-
-    // Step 2: Target model verifies all K+1 positions in ONE forward pass
-    // (all tokens including the K drafted ones)
-    const verifyInput = [...tokens, ...draftTokens];
-    const targetLogits = target.forward([verifyInput]);
-    totalTargetForwards++;
-
-    // Step 3: Compare draft and target distributions, accept/reject
-    let accepted = 0;
-    for (let i = 0; i < specLen; i++) {
-      const pos = tokens.length + i - 1; // position in the verify sequence
-      const targetPos = extractPositionLogits(targetLogits, pos, vocabSize);
-      const draftPos = draftLogits[i];
-
-      const draftProbs = softmax(draftPos);
-      const targetProbs = softmax(targetPos);
-
-      const draftedToken = draftTokens[i];
-      const acceptanceProb = Math.min(1, targetProbs[draftedToken] / Math.max(draftProbs[draftedToken], 1e-15));
-
-      if (Math.random() < acceptanceProb) {
-        // Accept this token
-        tokens.push(draftedToken);
-        accepted++;
-      } else {
-        // Reject: sample from adjusted distribution
-        // p'(x) = max(0, p_target(x) - p_draft(x)) / Z
-        const adjusted = new Float64Array(vocabSize);
-        let sum = 0;
-        for (let v = 0; v < vocabSize; v++) {
-          adjusted[v] = Math.max(0, targetProbs[v] - draftProbs[v]);
-          sum += adjusted[v];
-        }
-        if (sum > 0) {
-          for (let v = 0; v < vocabSize; v++) adjusted[v] /= sum;
-        } else {
-          // Fallback to target distribution
-          for (let v = 0; v < vocabSize; v++) adjusted[v] = targetProbs[v];
-        }
-
-        const sampled = sampleFromDist(adjusted);
-        tokens.push(sampled);
-        break; // Stop speculation at first rejection
-      }
-    }
-
-    totalAccepted += accepted;
-
-    // If all K were accepted, sample one more from the target's next position
-    if (accepted === specLen && tokens.length - prompt.length < maxNewTokens) {
-      const lastPos = tokens.length - 1;
-      const nextLogits = extractPositionLogits(targetLogits, lastPos, vocabSize);
-      const nextProbs = softmax(nextLogits);
-      tokens.push(sampleFromDist(nextProbs));
+export function speculativeStep(draftForward, targetForward, prefix, gamma, sample = argmax) {
+  // 1. Draft model generates γ tokens autoregressively
+  const draftTokens = [];
+  let draftPrefix = [...prefix];
+  
+  for (let i = 0; i < gamma; i++) {
+    const logits = draftForward(draftPrefix);
+    const lastLogits = getLastRow(logits);
+    const token = sample(lastLogits);
+    draftTokens.push(token);
+    draftPrefix.push(token);
+  }
+  
+  // 2. Target model verifies all tokens in one forward pass
+  const verifyPrefix = [...prefix, ...draftTokens];
+  const targetLogits = targetForward(verifyPrefix);
+  
+  // 3. Check which draft tokens match target's distribution
+  const accepted = [];
+  let allAccepted = true;
+  
+  for (let i = 0; i < gamma; i++) {
+    const targetIdx = prefix.length + i; // Position where target predicts token i+1
+    const targetRow = getRow(targetLogits, targetIdx);
+    const targetToken = sample(targetRow);
+    
+    if (targetToken === draftTokens[i]) {
+      accepted.push(draftTokens[i]);
+    } else {
+      // Reject this and all subsequent draft tokens
+      // Use target's prediction instead
+      accepted.push(targetToken);
+      allAccepted = false;
+      break;
     }
   }
-
-  return {
-    tokens: tokens.slice(0, prompt.length + maxNewTokens),
-    stats: {
-      draftForwards: totalDraftForwards,
-      targetForwards: totalTargetForwards,
-      totalAccepted,
-      totalDrafted,
-      acceptanceRate: totalDrafted > 0 ? (totalAccepted / totalDrafted * 100).toFixed(1) + '%' : '0%',
-      // Speedup: without speculation, would need maxNewTokens target forwards
-      // With speculation: totalTargetForwards target forwards
-      speedup: totalTargetForwards > 0 ? (maxNewTokens / totalTargetForwards).toFixed(2) + 'x' : '1x',
+  
+  // If all draft tokens accepted, also get target's prediction for next token
+  if (allAccepted) {
+    const lastRow = getRow(targetLogits, prefix.length + gamma - 1);
+    if (lastRow) {
+      accepted.push(sample(lastRow));
     }
+  }
+  
+  return {
+    tokens: accepted,
+    accepted: allAccepted ? gamma : accepted.length - 1, // -1 because we added target's correction
+    totalGenerated: accepted.length,
+    rejectedAt: allAccepted ? -1 : accepted.length - 1,
   };
 }
 
-// --- Helpers ---
-
-function extractPositionLogits(logitsMatrix, pos, vocabSize) {
-  const result = new Float64Array(vocabSize);
-  for (let v = 0; v < vocabSize; v++) {
-    result[v] = logitsMatrix.get(0, pos * vocabSize + v);
+/**
+ * Full speculative generation loop.
+ */
+export function speculativeGenerate(draftForward, targetForward, prefix, maxTokens, gamma = 4, sample = argmax) {
+  const generated = [...prefix];
+  let totalAccepted = 0;
+  let totalSteps = 0;
+  
+  while (generated.length < prefix.length + maxTokens) {
+    const result = speculativeStep(
+      draftForward, targetForward, generated, gamma, sample
+    );
+    
+    for (const token of result.tokens) {
+      if (generated.length >= prefix.length + maxTokens) break;
+      generated.push(token);
+    }
+    
+    totalAccepted += result.accepted;
+    totalSteps++;
   }
-  return result;
+  
+  return {
+    tokens: generated.slice(prefix.length),
+    totalSteps, // Number of target model forward passes
+    totalAccepted,
+    avgAcceptance: totalAccepted / totalSteps,
+    speedup: generated.length / totalSteps, // Tokens per target forward pass
+  };
 }
 
-function argmax(arr) {
-  let maxIdx = 0, maxVal = -Infinity;
-  for (let i = 0; i < arr.length; i++) {
-    if (arr[i] > maxVal) { maxVal = arr[i]; maxIdx = i; }
+function argmax(logits) {
+  if (logits instanceof Matrix) {
+    let maxIdx = 0, maxVal = -Infinity;
+    for (let i = 0; i < logits.cols; i++) {
+      if (logits.get(0, i) > maxVal) { maxVal = logits.get(0, i); maxIdx = i; }
+    }
+    return maxIdx;
   }
-  return maxIdx;
+  if (Array.isArray(logits) || logits instanceof Float64Array) {
+    let maxIdx = 0, maxVal = -Infinity;
+    for (let i = 0; i < logits.length; i++) {
+      if (logits[i] > maxVal) { maxVal = logits[i]; maxIdx = i; }
+    }
+    return maxIdx;
+  }
+  return 0;
 }
 
-function sampleFromDist(probs) {
-  const r = Math.random();
-  let cum = 0;
-  for (let i = 0; i < probs.length; i++) {
-    cum += probs[i];
-    if (r < cum) return i;
+function getLastRow(logits) {
+  if (logits instanceof Matrix) {
+    const row = new Matrix(1, logits.cols);
+    for (let j = 0; j < logits.cols; j++) row.set(0, j, logits.get(logits.rows - 1, j));
+    return row;
   }
-  return probs.length - 1;
+  return logits;
+}
+
+function getRow(logits, idx) {
+  if (logits instanceof Matrix && idx < logits.rows) {
+    const row = new Matrix(1, logits.cols);
+    for (let j = 0; j < logits.cols; j++) row.set(0, j, logits.get(idx, j));
+    return row;
+  }
+  return null;
 }
