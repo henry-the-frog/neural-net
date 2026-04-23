@@ -54,8 +54,13 @@ export class AdamW {
   update(paramId, param, grad, lr = null) {
     const currentLr = lr ?? this.lr;
 
+    // Support both plain arrays and Matrix objects
+    const pData = param.data ?? param;
+    const gData = grad.data ?? grad;
+    const len = pData.length;
+
     if (!this.states.has(paramId)) {
-      this.states.set(paramId, new ParamState(param.length));
+      this.states.set(paramId, new ParamState(len));
     }
     const state = this.states.get(paramId);
 
@@ -66,17 +71,17 @@ export class AdamW {
     const bc1 = 1 - Math.pow(beta1, this.step);
     const bc2 = 1 - Math.pow(beta2, this.step);
 
-    for (let i = 0; i < param.length; i++) {
+    for (let i = 0; i < len; i++) {
       // Update moments
-      state.m[i] = beta1 * state.m[i] + (1 - beta1) * grad[i];
-      state.v[i] = beta2 * state.v[i] + (1 - beta2) * grad[i] * grad[i];
+      state.m[i] = beta1 * state.m[i] + (1 - beta1) * gData[i];
+      state.v[i] = beta2 * state.v[i] + (1 - beta2) * gData[i] * gData[i];
 
       // Bias-corrected moments
       const mHat = state.m[i] / bc1;
       const vHat = state.v[i] / bc2;
 
       // AdamW update: decoupled weight decay
-      param[i] -= currentLr * (mHat / (Math.sqrt(vHat) + epsilon) + weightDecay * param[i]);
+      pData[i] -= currentLr * (mHat / (Math.sqrt(vHat) + epsilon) + weightDecay * pData[i]);
     }
   }
 
@@ -100,14 +105,18 @@ export class SGDMomentum {
   }
 
   update(paramId, param, grad) {
+    const pData = param.data ?? param;
+    const gData = grad.data ?? grad;
+    const len = pData.length;
+
     if (!this.velocities.has(paramId)) {
-      this.velocities.set(paramId, new Float64Array(param.length));
+      this.velocities.set(paramId, new Float64Array(len));
     }
     const v = this.velocities.get(paramId);
 
-    for (let i = 0; i < param.length; i++) {
-      v[i] = this.momentum * v[i] + grad[i];
-      param[i] -= this.lr * v[i];
+    for (let i = 0; i < len; i++) {
+      v[i] = this.momentum * v[i] + gData[i];
+      pData[i] -= this.lr * v[i];
     }
   }
 
