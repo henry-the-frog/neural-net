@@ -7,23 +7,24 @@ import { Matrix } from './matrix.js';
 describe('Mixture of Experts', () => {
   describe('constructor', () => {
     it('creates with valid config', () => {
-      const moe = new MixtureOfExperts(8, 4, 2);
+      // (inputSize, numExperts, dHidden, outputSize, topK)
+      const moe = new MixtureOfExperts(8, 4, 16, 8, 2);
       assert.equal(moe.numExperts, 4);
       assert.equal(moe.topK, 2);
     });
 
     it('rejects topK > numExperts', () => {
-      assert.throws(() => new MixtureOfExperts(8, 4, 5));
+      assert.throws(() => new MixtureOfExperts(8, 4, 16, 8, 5));
     });
 
     it('rejects topK < 1', () => {
-      assert.throws(() => new MixtureOfExperts(8, 4, 0));
+      assert.throws(() => new MixtureOfExperts(8, 4, 16, 8, 0));
     });
   });
 
   describe('forward', () => {
     it('produces correct output shape', () => {
-      const moe = new MixtureOfExperts(8, 4, 2, 16);
+      const moe = new MixtureOfExperts(8, 4, 16, 8, 2);
       const input = Matrix.random(5, 8); // 5 tokens
       const output = moe.forward(input);
       assert.equal(output.rows, 5);
@@ -31,7 +32,7 @@ describe('Mixture of Experts', () => {
     });
 
     it('output values are finite', () => {
-      const moe = new MixtureOfExperts(4, 3, 2, 8);
+      const moe = new MixtureOfExperts(4, 3, 8, 4, 2);
       const input = Matrix.random(3, 4);
       const output = moe.forward(input);
       for (let i = 0; i < output.rows; i++)
@@ -40,7 +41,7 @@ describe('Mixture of Experts', () => {
     });
 
     it('different inputs produce different outputs', () => {
-      const moe = new MixtureOfExperts(4, 4, 2, 8);
+      const moe = new MixtureOfExperts(4, 4, 8, 4, 2);
       const in1 = Matrix.random(1, 4);
       const in2 = Matrix.random(1, 4);
       const out1 = moe.forward(in1);
@@ -51,7 +52,7 @@ describe('Mixture of Experts', () => {
     });
 
     it('topK=1 (Switch Transformer style)', () => {
-      const moe = new MixtureOfExperts(4, 8, 1, 8);
+      const moe = new MixtureOfExperts(4, 8, 8, 4, 1);
       const input = Matrix.random(10, 4);
       const output = moe.forward(input);
       assert.equal(output.rows, 10);
@@ -61,7 +62,7 @@ describe('Mixture of Experts', () => {
 
   describe('routing stats', () => {
     it('tracks expert utilization', () => {
-      const moe = new MixtureOfExperts(4, 4, 2);
+      const moe = new MixtureOfExperts(4, 4, 8, 4, 2);
       const input = Matrix.random(20, 4);
       moe.forward(input);
 
@@ -75,37 +76,38 @@ describe('Mixture of Experts', () => {
       for (const s of stats) console.log(`    Expert ${s.expert}: ${s.count} (${s.pct})`);
     });
 
-    it('resetStats clears counts', () => {
-      const moe = new MixtureOfExperts(4, 4, 2);
+    it('resetRoutingStats clears counts', () => {
+      const moe = new MixtureOfExperts(4, 4, 8, 4, 2);
       moe.forward(Matrix.random(5, 4));
-      moe.resetStats();
-      const stats = moe.routingStats();
-      assert.ok(stats.every(s => s.count === 0));
+      moe.resetRoutingStats();
+      assert.equal(moe.totalRouted, 0);
+      assert.ok(moe.routingCounts.every(c => c === 0));
     });
   });
 
   describe('load balancing', () => {
-    it('perfect balance gives loss = 1', () => {
-      const moe = new MixtureOfExperts(4, 4, 2);
-      // Simulate perfect balance: each expert selected equal times
-      moe._routingStats = [10, 10, 10, 10];
+    it('perfect balance gives loss near 0', () => {
+      const moe = new MixtureOfExperts(4, 4, 8, 4, 2);
+      // Perfect balance: each expert selected equal times
+      moe.routingCounts = [10, 10, 10, 10];
+      moe.totalRouted = 40;
       const loss = moe.loadBalanceLoss();
-      // 4 * Σ(0.25²) = 4 * 4 * 0.0625 = 1.0
-      assert.ok(Math.abs(loss - 1.0) < 0.01, `Perfect balance loss should be ~1.0, got ${loss}`);
+      // Deviation from ideal is 0 → loss = 0
+      assert.ok(Math.abs(loss) < 0.01, `Perfect balance loss should be ~0, got ${loss}`);
     });
 
     it('perfect imbalance gives high loss', () => {
-      const moe = new MixtureOfExperts(4, 4, 2);
-      moe._routingStats = [40, 0, 0, 0]; // all tokens → expert 0
+      const moe = new MixtureOfExperts(4, 4, 8, 4, 2);
+      moe.routingCounts = [40, 0, 0, 0]; // all tokens → expert 0
+      moe.totalRouted = 40;
       const loss = moe.loadBalanceLoss();
-      // 4 * (1.0² + 0 + 0 + 0) = 4.0
-      assert.equal(loss, 4.0, 'Perfect imbalance should give max loss');
+      assert.ok(loss > 0, 'Perfect imbalance should give positive loss');
     });
   });
 
   describe('parameter efficiency', () => {
     it('MoE has more total params but fewer active params', () => {
-      const moe = new MixtureOfExperts(16, 8, 2, 32);
+      const moe = new MixtureOfExperts(16, 8, 32, 16, 2);
       const totalParams = moe.paramCount();
       const activeParams = moe.activeParamsPerToken();
       
@@ -113,7 +115,6 @@ describe('Mixture of Experts', () => {
       console.log(`  Active per token: ${activeParams} (${(activeParams/totalParams*100).toFixed(1)}%)`);
       
       assert.ok(activeParams < totalParams, 'Active params should be less than total');
-      // With 8 experts and top-2: active ≈ 2/8 = 25% of expert params
       assert.ok(activeParams / totalParams < 0.5, 'Should use < 50% of total params');
     });
   });

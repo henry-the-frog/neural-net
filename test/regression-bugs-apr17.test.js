@@ -18,7 +18,7 @@ describe('Bug Regression Tests (Apr 17, 2026)', () => {
 
   it('Bug #2: MoE produces different outputs for different inputs', async () => {
     const { MixtureOfExperts } = await import('../src/moe.js');
-    const moe = new MixtureOfExperts(2, 3, 2, 2);
+    const moe = new MixtureOfExperts(2, 3, 4, 2, 2);
     const out1 = moe.forward(Matrix.fromArray([[1, 0]]));
     const out2 = moe.forward(Matrix.fromArray([[0, 1]]));
     let allSame = true;
@@ -30,7 +30,7 @@ describe('Bug Regression Tests (Apr 17, 2026)', () => {
 
   it('Bug #3: MoE batch produces finite outputs', async () => {
     const { MixtureOfExperts } = await import('../src/moe.js');
-    const moe = new MixtureOfExperts(2, 3, 2, 2);
+    const moe = new MixtureOfExperts(2, 3, 4, 2, 2);
     const batch = Matrix.fromArray([[1, 0], [0, 1], [0.5, 0.5]]);
     const out = moe.forward(batch);
     assert.ok(out.data.every(v => isFinite(v)), 'All outputs should be finite');

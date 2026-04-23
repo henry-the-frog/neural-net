@@ -536,7 +536,7 @@ export class Network {
         }
         case 'MixtureOfExperts': {
           if (!MixtureOfExperts) throw new Error('MixtureOfExperts not available for deserialization');
-          layer = new MixtureOfExperts(d.dModel, d.numExperts, d.topK, d.dHidden);
+          layer = new MixtureOfExperts(d.dModel || d.inputSize, d.numExperts, d.dHidden || 16, d.outputSize || d.dModel || d.inputSize, d.topK);
           // Restore router weights
           if (d.routerWeightShape && layer.routerW) {
             layer.routerW = new Matrix(d.routerWeightShape[0], d.routerWeightShape[1], new Float64Array(d.routerWeights));
@@ -550,10 +550,17 @@ export class Network {
               if (ed.W1) {
                 expert.W1 = new Matrix(ed.W1.shape[0], ed.W1.shape[1], new Float64Array(ed.W1.data));
               }
+              if (ed.b1) {
+                expert.b1 = new Matrix(ed.b1.shape[0], ed.b1.shape[1], new Float64Array(ed.b1.data));
+              }
               if (ed.W2) {
                 expert.W2 = new Matrix(ed.W2.shape[0], ed.W2.shape[1], new Float64Array(ed.W2.data));
               }
-              if (ed.W3) {
+              if (ed.b2) {
+                expert.b2 = new Matrix(ed.b2.shape[0], ed.b2.shape[1], new Float64Array(ed.b2.data));
+              }
+              // Legacy: W3 from SwiGLU experts (ignored for new ExpertFFN)
+              if (ed.W3 && expert.W3) {
                 expert.W3 = new Matrix(ed.W3.shape[0], ed.W3.shape[1], new Float64Array(ed.W3.data));
               }
             }
@@ -682,10 +689,11 @@ export class Network {
         // Serialize residual weights (nested array [inputSize][outputSize])
         info.residualWeights = layer.residualWeights.map(row => Array.from(row));
       } else if (layer.constructor.name === 'MixtureOfExperts') {
-        info.dModel = layer.dModel;
+        info.dModel = layer.inputSize;
+        info.inputSize = layer.inputSize;
         info.numExperts = layer.numExperts || layer.experts?.length;
         info.topK = layer.topK;
-        info.dHidden = layer.experts?.[0]?.dHidden;
+        info.dHidden = layer.dHidden || layer.experts?.[0]?.dHidden;
         info.outputSize = layer.outputSize;
         // Serialize router weights
         if (layer.routerW) {
@@ -694,23 +702,28 @@ export class Network {
           info.routerBiases = Array.from(layer.routerB.data);
           info.routerBiasShape = [layer.routerB.rows, layer.routerB.cols];
         }
-        // Serialize expert networks (SwiGLU FFNs with W1, W2, W3)
+        // Serialize expert networks (Dense FFNs with W1, b1, W2, b2)
         if (layer.experts) {
           info.experts = layer.experts.map(expert => ({
             W1: {
               data: Array.from(expert.W1.data),
               shape: [expert.W1.rows, expert.W1.cols],
             },
+            b1: {
+              data: Array.from(expert.b1.data),
+              shape: [expert.b1.rows, expert.b1.cols],
+            },
             W2: {
               data: Array.from(expert.W2.data),
               shape: [expert.W2.rows, expert.W2.cols],
             },
-            W3: {
-              data: Array.from(expert.W3.data),
-              shape: [expert.W3.rows, expert.W3.cols],
+            b2: {
+              data: Array.from(expert.b2.data),
+              shape: [expert.b2.rows, expert.b2.cols],
             },
-            dModel: expert.dModel,
+            inputSize: expert.inputSize,
             dHidden: expert.dHidden,
+            outputSize: expert.outputSize,
           }));
         }
       }
