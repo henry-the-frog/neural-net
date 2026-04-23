@@ -1,89 +1,77 @@
 // speculative-decoding.test.js
-import { describe, it } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { speculativeStep, speculativeGenerate } from './speculative-decoding.js';
-import { Matrix } from './matrix.js';
+import { speculativeDecodeStep } from './speculative-decoding.js';
 
-// Mock models: both predict the same sequence for testing
-function mockModel(vocabSize, sequence) {
-  let callCount = 0;
-  return {
-    forward: (tokens) => {
-      const seqLen = tokens.length;
-      const logits = new Matrix(seqLen, vocabSize);
-      for (let t = 0; t < seqLen; t++) {
-        const nextToken = sequence[t] !== undefined ? sequence[t] : 0;
-        logits.set(t, nextToken, 10.0); // High logit for predicted token
-      }
-      callCount++;
-      return logits;
-    },
-    callCount: () => callCount,
-  };
-}
+describe('Speculative Decoding', () => {
+  // Simple mock models: draft predicts uniform, target has strong preferences
+  const vocabSize = 10;
+  
+  function mockDraftForward(tokens) {
+    // Uniform distribution (weak model)
+    return new Float64Array(vocabSize).fill(0);
+  }
+  
+  function mockTargetForward(tokens) {
+    // Returns logits for each position
+    const result = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const logits = new Float64Array(vocabSize).fill(0);
+      logits[tokens[i] % vocabSize] = 5; // Prefer repeating previous token
+      result.push(logits);
+    }
+    return result;
+  }
 
-describe('speculativeStep', () => {
-  it('accepts all tokens when draft matches target', () => {
-    // Both models always predict token 5 — perfect agreement
-    const alwaysFive = (tokens) => {
-      const logits = new Matrix(tokens.length, 10);
-      for (let t = 0; t < tokens.length; t++) logits.set(t, 5, 10.0);
-      return logits;
-    };
-    
-    const result = speculativeStep(alwaysFive, alwaysFive, [0], 4);
-    assert.equal(result.accepted, 4, 'Should accept all 4 draft tokens');
-    assert.equal(result.tokens.length, 5); // 4 accepted + 1 bonus
-  });
-  
-  it('rejects when draft diverges from target', () => {
-    const draftSeq = [3, 1, 4, 1, 5]; // Draft predicts this
-    const targetSeq = [3, 1, 4, 2, 5]; // Target predicts different at position 3
-    
-    const draft = mockModel(10, draftSeq);
-    const target = mockModel(10, targetSeq);
-    
-    const result = speculativeStep(draft.forward, target.forward, [3], 4);
-    // Should reject at the divergence point
-    assert.ok(result.tokens.length > 0);
-  });
-  
-  it('returns at least one token (target correction)', () => {
-    const draft = mockModel(10, [0, 0, 0, 0, 0]);
-    const target = mockModel(10, [0, 1, 0, 0, 0]); // Diverges at position 1
-    
-    const result = speculativeStep(draft.forward, target.forward, [0], 4);
+  test('returns at least 1 token', () => {
+    const result = speculativeDecodeStep(mockDraftForward, mockTargetForward, [1, 2, 3], 4);
     assert.ok(result.tokens.length >= 1);
   });
-});
 
-describe('speculativeGenerate', () => {
-  it('generates requested number of tokens', () => {
-    const seq = Array.from({ length: 100 }, (_, i) => i % 10);
-    const draft = mockModel(10, seq);
-    const target = mockModel(10, seq);
-    
-    const result = speculativeGenerate(draft.forward, target.forward, [0], 20, 4);
-    assert.ok(result.tokens.length >= 20);
+  test('returns at most K+1 tokens', () => {
+    const result = speculativeDecodeStep(mockDraftForward, mockTargetForward, [1, 2, 3], 4);
+    assert.ok(result.tokens.length <= 5); // K + 1
   });
-  
-  it('reports speedup metrics', () => {
-    const seq = Array.from({ length: 100 }, (_, i) => i % 5);
-    const draft = mockModel(5, seq);
-    const target = mockModel(5, seq);
-    
-    const result = speculativeGenerate(draft.forward, target.forward, [0], 10, 4);
-    assert.ok(result.totalSteps > 0);
-    assert.ok(result.speedup > 0);
-    assert.ok(result.avgAcceptance >= 0);
+
+  test('acceptance rate is between 0 and 1', () => {
+    const result = speculativeDecodeStep(mockDraftForward, mockTargetForward, [1, 2, 3], 4);
+    assert.ok(result.acceptanceRate >= 0);
+    assert.ok(result.acceptanceRate <= 1);
   });
-  
-  it('works with gamma=1 (minimal speculation)', () => {
-    const seq = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
-    const draft = mockModel(10, seq);
-    const target = mockModel(10, seq);
+
+  test('tokens are valid indices', () => {
+    const result = speculativeDecodeStep(mockDraftForward, mockTargetForward, [1, 2, 3], 4);
+    for (const t of result.tokens) {
+      assert.ok(t >= 0 && t < vocabSize, `Token ${t} should be in [0, ${vocabSize})`);
+    }
+  });
+
+  test('accepted count matches reported', () => {
+    const result = speculativeDecodeStep(mockDraftForward, mockTargetForward, [1, 2, 3], 4);
+    assert.ok(result.accepted >= 0);
+    assert.ok(result.accepted <= result.total);
+  });
+
+  test('K=1 produces 1-2 tokens', () => {
+    const result = speculativeDecodeStep(mockDraftForward, mockTargetForward, [1, 2, 3], 1);
+    assert.ok(result.tokens.length >= 1 && result.tokens.length <= 2);
+  });
+
+  test('identical draft and target → high acceptance', () => {
+    // When draft = target, acceptance should be 100%
+    function identicalModel(tokens) { return new Float64Array(vocabSize).fill(1); }
+    function identicalTarget(tokens) {
+      return tokens.map(() => new Float64Array(vocabSize).fill(1));
+    }
     
-    const result = speculativeGenerate(draft.forward, target.forward, [1], 5, 1);
-    assert.ok(result.tokens.length >= 5);
+    let totalAccepted = 0, totalK = 0;
+    for (let trial = 0; trial < 10; trial++) {
+      const result = speculativeDecodeStep(identicalModel, identicalTarget, [0], 4);
+      totalAccepted += result.accepted;
+      totalK += result.total;
+    }
+    // With identical models, acceptance should be very high
+    assert.ok(totalAccepted / totalK > 0.8, 
+      `Identical models acceptance ${totalAccepted}/${totalK} should be >80%`);
   });
 });

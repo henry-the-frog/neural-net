@@ -3,6 +3,8 @@
 // Zero dependencies beyond matrix.js and the existing layer infrastructure.
 
 import { Matrix } from './matrix.js';
+import { AdamW } from './adamw.js';
+import { CosineAnnealingLR } from './lr-scheduler.js';
 
 /**
  * Character-level tokenizer — maps chars to integer IDs
@@ -384,9 +386,29 @@ export class CharLM {
   }
 
   /**
+   * Update all parameters using AdamW optimizer
+   */
+  updateAdamW(optimizer) {
+    optimizer.update('embedding', this.embedding, this.dEmbedding);
+    optimizer.update('outputW', this.outputW, this.dOutputW);
+    optimizer.update('outputB', this.outputB, this.dOutputB);
+    for (let i = 0; i < this.blocks.length; i++) {
+      const b = this.blocks[i];
+      optimizer.update(`b${i}.attn.Wq`, b.attn.Wq, b.attn.dWq);
+      optimizer.update(`b${i}.attn.Wk`, b.attn.Wk, b.attn.dWk);
+      optimizer.update(`b${i}.attn.Wv`, b.attn.Wv, b.attn.dWv);
+      optimizer.update(`b${i}.attn.Wo`, b.attn.Wo, b.attn.dWo);
+      optimizer.update(`b${i}.ffn.W1`, b.ffn.W1, b.ffn.dW1);
+      optimizer.update(`b${i}.ffn.b1`, b.ffn.b1, b.ffn.db1);
+      optimizer.update(`b${i}.ffn.W2`, b.ffn.W2, b.ffn.dW2);
+      optimizer.update(`b${i}.ffn.b2`, b.ffn.b2, b.ffn.db2);
+    }
+  }
+
+  /**
    * Train on a single sequence: tokens[0..n-1] predict tokens[1..n]
    */
-  trainStep(tokens, lr = 0.001, clipNorm = 1.0) {
+  trainStep(tokens, lr = 0.001, clipNorm = 1.0, optimizer = null) {
     const input = tokens.slice(0, -1);
     const target = tokens.slice(1);
     
@@ -397,9 +419,93 @@ export class CharLM {
     // Gradient clipping by global norm
     if (clipNorm > 0) this._clipGradients(clipNorm);
     
-    this.update(lr);
+    if (optimizer) {
+      this.updateAdamW(optimizer);
+    } else {
+      this.update(lr);
+    }
     
     return loss;
+  }
+
+  /**
+   * Forward + backward without weight update (for gradient accumulation).
+   * Gradients are ADDED to existing gradients, not replaced.
+   */
+  trainStepAccumulate(tokens) {
+    const input = tokens.slice(0, -1);
+    const target = tokens.slice(1);
+    
+    const logits = this.forward(input);
+    const { loss, dLogits } = this.loss(logits, target);
+    
+    // Save current gradients
+    const savedGrads = this._saveGradients();
+    
+    this.backward(dLogits);
+    
+    // Add saved gradients back (accumulate)
+    this._addGradients(savedGrads);
+    
+    return loss;
+  }
+
+  /** Save current gradient state */
+  _saveGradients() {
+    const saved = {
+      dEmbedding: this.dEmbedding ? new Float64Array(this.dEmbedding.data) : null,
+      dOutputW: this.dOutputW ? new Float64Array(this.dOutputW.data) : null,
+      dOutputB: this.dOutputB ? new Float64Array(this.dOutputB.data) : null,
+      blocks: this.blocks.map(b => ({
+        dWq: b.attn.dWq ? new Float64Array(b.attn.dWq.data) : null,
+        dWk: b.attn.dWk ? new Float64Array(b.attn.dWk.data) : null,
+        dWv: b.attn.dWv ? new Float64Array(b.attn.dWv.data) : null,
+        dWo: b.attn.dWo ? new Float64Array(b.attn.dWo.data) : null,
+        dW1: b.ffn.dW1 ? new Float64Array(b.ffn.dW1.data) : null,
+        db1: b.ffn.db1 ? new Float64Array(b.ffn.db1.data) : null,
+        dW2: b.ffn.dW2 ? new Float64Array(b.ffn.dW2.data) : null,
+        db2: b.ffn.db2 ? new Float64Array(b.ffn.db2.data) : null,
+      })),
+    };
+    return saved;
+  }
+
+  /** Add saved gradients to current gradients (accumulation) */
+  _addGradients(saved) {
+    if (saved.dEmbedding && this.dEmbedding) {
+      for (let i = 0; i < this.dEmbedding.data.length; i++) this.dEmbedding.data[i] += saved.dEmbedding[i];
+    }
+    if (saved.dOutputW && this.dOutputW) {
+      for (let i = 0; i < this.dOutputW.data.length; i++) this.dOutputW.data[i] += saved.dOutputW[i];
+    }
+    if (saved.dOutputB && this.dOutputB) {
+      for (let i = 0; i < this.dOutputB.data.length; i++) this.dOutputB.data[i] += saved.dOutputB[i];
+    }
+    for (let bi = 0; bi < this.blocks.length; bi++) {
+      const b = this.blocks[bi];
+      const s = saved.blocks[bi];
+      const pairs = [
+        [b.attn.dWq, s.dWq], [b.attn.dWk, s.dWk], [b.attn.dWv, s.dWv], [b.attn.dWo, s.dWo],
+        [b.ffn.dW1, s.dW1], [b.ffn.db1, s.db1], [b.ffn.dW2, s.dW2], [b.ffn.db2, s.db2],
+      ];
+      for (const [curr, prev] of pairs) {
+        if (curr && prev) {
+          for (let i = 0; i < curr.data.length; i++) curr.data[i] += prev[i];
+        }
+      }
+    }
+  }
+
+  /** Scale all current gradients by a factor (for averaging accumulated gradients) */
+  _scaleGradients(factor) {
+    const scale = (mat) => { if (mat) for (let i = 0; i < mat.data.length; i++) mat.data[i] *= factor; };
+    scale(this.dEmbedding);
+    scale(this.dOutputW);
+    scale(this.dOutputB);
+    for (const b of this.blocks) {
+      scale(b.attn.dWq); scale(b.attn.dWk); scale(b.attn.dWv); scale(b.attn.dWo);
+      scale(b.ffn.dW1); scale(b.ffn.db1); scale(b.ffn.dW2); scale(b.ffn.db2);
+    }
   }
 
   /**
@@ -443,16 +549,85 @@ export class CharLM {
    * @param {Object} opts - Training options
    * @returns {{ losses: number[], finalLoss: number }}
    */
-  train(allTokens, { epochs = 1000, windowSize = 16, lr = 0.001, clipNorm = 1.0, logEvery = 100 } = {}) {
+  train(allTokens, { epochs = 1000, windowSize = 16, lr = 0.001, clipNorm = 1.0, logEvery = 100, optimizer = null, lrSchedule = null, gradAccumSteps = 1 } = {}) {
+    // Create AdamW optimizer if requested by string
+    let opt = optimizer;
+    if (optimizer === 'adamw') {
+      opt = new AdamW({ lr, weightDecay: 0.01 });
+    } else if (optimizer === 'adamw-warmup') {
+      opt = new AdamW({ lr, weightDecay: 0.01 });
+      opt._warmupSteps = Math.min(100, Math.floor(epochs * 0.1));
+    }
+    
+    // Create LR scheduler if requested
+    let scheduler = lrSchedule;
+    if (lrSchedule === 'cosine') {
+      const cosine = new CosineAnnealingLR(lr, epochs, lr * 0.01);
+      let step = 0;
+      scheduler = { step() { return cosine.getLR(step++); } };
+    } else if (lrSchedule === 'cosine-warmup') {
+      const warmupSteps = Math.min(100, Math.floor(epochs * 0.1));
+      const cosine = new CosineAnnealingLR(lr, epochs - warmupSteps, lr * 0.01);
+      let currentStep = 0;
+      scheduler = { 
+        step() {
+          const i = currentStep++;
+          if (i < warmupSteps) return lr * (i + 1) / warmupSteps;
+          return cosine.getLR(i - warmupSteps);
+        }
+      };
+    }
+    
     const losses = [];
     for (let i = 0; i < epochs; i++) {
       const start = Math.floor(Math.random() * (allTokens.length - windowSize));
       const window = allTokens.slice(start, start + windowSize);
-      const loss = this.trainStep(window, lr, clipNorm);
-      losses.push(loss);
+      
+      // Learning rate scheduling
+      let currentLr = lr;
+      if (scheduler && scheduler.step) {
+        currentLr = scheduler.step(i);
+      } else if (opt && opt._warmupSteps && i < opt._warmupSteps) {
+        currentLr = lr * (i + 1) / opt._warmupSteps;
+      }
+      
+      if (opt) opt.lr = currentLr;
+      
+      if (gradAccumSteps > 1) {
+        // Gradient accumulation: forward+backward N times, then update once
+        let accumLoss = 0;
+        for (let ga = 0; ga < gradAccumSteps; ga++) {
+          const gaStart = Math.floor(Math.random() * (allTokens.length - windowSize));
+          const gaWindow = allTokens.slice(gaStart, gaStart + windowSize);
+          if (ga === 0) {
+            // First step: normal forward+backward (sets gradients)
+            const input = gaWindow.slice(0, -1);
+            const target = gaWindow.slice(1);
+            const logits = this.forward(input);
+            const { loss: l, dLogits } = this.loss(logits, target);
+            this.backward(dLogits);
+            accumLoss += l;
+          } else {
+            // Subsequent steps: accumulate gradients
+            accumLoss += this.trainStepAccumulate(gaWindow);
+          }
+        }
+        // Average gradients
+        this._scaleGradients(1.0 / gradAccumSteps);
+        if (clipNorm > 0) this._clipGradients(clipNorm);
+        if (opt) {
+          this.updateAdamW(opt);
+        } else {
+          this.update(currentLr);
+        }
+        losses.push(accumLoss / gradAccumSteps);
+      } else {
+        const loss = this.trainStep(window, currentLr, clipNorm, opt);
+        losses.push(loss);
+      }
       if (logEvery > 0 && i % logEvery === 0) {
         const avg = losses.slice(-logEvery).reduce((a, b) => a + b) / Math.min(logEvery, losses.length);
-        console.log(`Step ${i}: loss = ${avg.toFixed(4)}`);
+        console.log(`Step ${i}: loss = ${avg.toFixed(4)} lr = ${currentLr.toFixed(6)}`);
       }
     }
     const finalLoss = losses.slice(-100).reduce((a, b) => a + b) / Math.min(100, losses.length);

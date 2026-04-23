@@ -1,139 +1,135 @@
-// Regularization techniques
+// regularization.js — Advanced Regularization Techniques
+// Gradient Penalty (WGAN-GP, Gulrajani et al., 2017)
+// Spectral Normalization (Miyato et al., 2018)
+// Weight Decay, L1/L2 regularization
+
 import { Matrix } from './matrix.js';
 
-function isMatrix(w) { return w && w.data instanceof Float64Array && 'rows' in w; }
-
 /**
- * L1 regularization (Lasso) — sum of absolute weights
+ * Gradient penalty for WGAN-GP.
+ * Enforces Lipschitz constraint by penalizing gradient norm ≠ 1.
+ * GP = E[(||∇D(x̂)||₂ - 1)²] where x̂ = εx_real + (1-ε)x_fake
+ * 
+ * @param {function} discriminator - D(x) → scalar
+ * @param {Float64Array} real - Real sample
+ * @param {Float64Array} fake - Fake sample
+ * @param {number} lambda - Gradient penalty weight (default 10)
+ * @returns {{ penalty: number, interpolated: Float64Array }}
  */
-export function l1Regularization(weights, lambda = 0.01) {
-  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
-  let penalty = 0;
-  for (const w of flat) penalty += Math.abs(w);
-  penalty *= lambda;
+export function gradientPenalty(discriminator, real, fake, lambda = 10) {
+  const n = real.length;
+  const epsilon = Math.random();
   
-  // Gradient: lambda * sign(w)
-  const gradArr = flat.map(w => lambda * Math.sign(w));
-  let gradient;
-  if (isMatrix(weights)) {
-    gradient = new Matrix(weights.rows, weights.cols);
-    gradient.data.set(gradArr);
-  } else {
-    gradient = gradArr;
+  // Interpolate between real and fake
+  const interpolated = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    interpolated[i] = epsilon * real[i] + (1 - epsilon) * fake[i];
   }
-  return { penalty, gradient };
-}
-
-/**
- * L2 regularization (Ridge) — sum of squared weights
- */
-export function l2Regularization(weights, lambda = 0.01) {
-  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
-  let penalty = 0;
-  for (const w of flat) penalty += w * w;
-  penalty = 0.5 * lambda * penalty;
   
-  const gradArr = flat.map(w => lambda * w);
-  let gradient;
-  if (isMatrix(weights)) {
-    gradient = new Matrix(weights.rows, weights.cols);
-    gradient.data.set(gradArr);
-  } else {
-    gradient = gradArr;
-  }
-  return { penalty, gradient };
-}
-
-/**
- * Elastic net — combination of L1 and L2
- */
-export function elasticNet(weights, lambda = 0.01, l1Ratio = 0.5) {
-  const l1 = l1Regularization(weights, lambda);
-  const l2 = l2Regularization(weights, lambda);
-  const l1g = isMatrix(l1.gradient) ? Array.from(l1.gradient.data) : l1.gradient;
-  const l2g = isMatrix(l2.gradient) ? Array.from(l2.gradient.data) : l2.gradient;
-  const gradArr = l1g.map((g, i) => l1Ratio * g + (1 - l1Ratio) * l2g[i]);
-  let gradient;
-  if (isMatrix(weights)) {
-    gradient = new Matrix(weights.rows, weights.cols);
-    gradient.data.set(gradArr);
-  } else {
-    gradient = gradArr;
-  }
-  return { penalty: l1Ratio * l1.penalty + (1 - l1Ratio) * l2.penalty, gradient };
-}
-
-/**
- * Weight decay — direct weight scaling
- */
-export function weightDecay(weights, decayRate = 0.01) {
-  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
-  const decayed = flat.map(w => w * (1 - decayRate));
-  if (isMatrix(weights)) {
-    const result = new Matrix(weights.rows, weights.cols);
-    result.data.set(decayed);
-    return result;
-  }
-  return decayed;
-}
-
-/**
- * Max norm constraint — clip weights if norm exceeds threshold
- */
-export function maxNormConstraint(weights, maxNorm = 1.0) {
-  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
-  let norm = 0;
-  for (const w of flat) norm += w * w;
-  norm = Math.sqrt(norm);
-  if (norm <= maxNorm) return weights;
-  const scale = maxNorm / norm;
-  const clipped = flat.map(w => w * scale);
-  if (isMatrix(weights)) {
-    const result = new Matrix(weights.rows, weights.cols);
-    result.data.set(clipped);
-    return result;
-  }
-  return clipped;
-}
-
-/**
- * Spectral norm — approximate largest singular value
- */
-export function spectralNorm(weights, iterations = 1) {
-  const flat = isMatrix(weights) ? Array.from(weights.data) : (Array.isArray(weights) ? weights.flat() : [...weights]);
-  let frobenius = 0;
-  for (const w of flat) frobenius += w * w;
-  return Math.sqrt(frobenius);
-}
-
-/**
- * Gradient clipping — clip gradients by norm or value
- */
-export function gradientClipping(gradients, maxNorm = 1.0, mode = 'norm') {
-  const flat = isMatrix(gradients) ? Array.from(gradients.data) : (Array.isArray(gradients) ? gradients.flat() : [...gradients]);
+  // Estimate gradient norm via finite differences
+  const delta = 1e-5;
+  const gradNorm = estimateGradientNorm(discriminator, interpolated, delta);
   
-  if (mode === 'value') {
-    const clipped = flat.map(g => Math.max(-maxNorm, Math.min(maxNorm, g)));
-    if (isMatrix(gradients)) {
-      const result = new Matrix(gradients.rows, gradients.cols);
-      result.data.set(clipped);
-      return result;
+  // Penalty: (||grad||₂ - 1)²
+  const penalty = lambda * (gradNorm - 1) ** 2;
+  
+  return { penalty, interpolated, gradNorm };
+}
+
+function estimateGradientNorm(fn, x, delta) {
+  const n = x.length;
+  let sumSq = 0;
+  const baseVal = fn(x);
+  
+  for (let i = 0; i < n; i++) {
+    const xPlus = new Float64Array(x);
+    xPlus[i] += delta;
+    const grad_i = (fn(xPlus) - baseVal) / delta;
+    sumSq += grad_i * grad_i;
+  }
+  
+  return Math.sqrt(sumSq);
+}
+
+/**
+ * Spectral normalization: normalize weight matrix by its largest singular value.
+ * Approximated via power iteration.
+ * @param {Matrix} W - Weight matrix
+ * @param {number} nIter - Number of power iterations (default 1)
+ * @returns {{ normalized: Matrix, sigma: number }}
+ */
+export function spectralNormalization(W, nIter = 1) {
+  const rows = W.rows;
+  const cols = W.cols;
+  
+  // Initialize u (left singular vector estimate)
+  let u = new Float64Array(rows);
+  for (let i = 0; i < rows; i++) u[i] = Math.random() - 0.5;
+  normalize(u);
+  
+  let v = new Float64Array(cols);
+  
+  for (let iter = 0; iter < nIter; iter++) {
+    // v = W^T u / ||W^T u||
+    v = new Float64Array(cols);
+    for (let j = 0; j < cols; j++) {
+      for (let i = 0; i < rows; i++) v[j] += W.get(i, j) * u[i];
     }
-    return clipped;
+    normalize(v);
+    
+    // u = W v / ||W v||
+    u = new Float64Array(rows);
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) u[i] += W.get(i, j) * v[j];
+    }
+    normalize(u);
   }
   
-  // Norm clipping
+  // Spectral norm: σ = u^T W v
+  let sigma = 0;
+  for (let i = 0; i < rows; i++) {
+    for (let j = 0; j < cols; j++) {
+      sigma += u[i] * W.get(i, j) * v[j];
+    }
+  }
+  
+  // Normalize W by sigma
+  const normalized = new Matrix(rows, cols);
+  for (let i = 0; i < W.data.length; i++) {
+    normalized.data[i] = W.data[i] / sigma;
+  }
+  
+  return { normalized, sigma };
+}
+
+function normalize(v) {
   let norm = 0;
-  for (const g of flat) norm += g * g;
-  norm = Math.sqrt(norm);
-  
-  if (norm <= maxNorm) return gradients;
-  const scale = maxNorm / norm;
-  const clipped = flat.map(g => g * scale);
-  if (isMatrix(gradients)) {
-    const result = new Matrix(gradients.rows, gradients.cols);
-    result.data.set(clipped);
-    return result;
-  }
-  return clipped;
+  for (let i = 0; i < v.length; i++) norm += v[i] * v[i];
+  norm = Math.sqrt(norm + 1e-10);
+  for (let i = 0; i < v.length; i++) v[i] /= norm;
+}
+
+/**
+ * L1 regularization (Lasso): promotes sparsity.
+ */
+export function l1Penalty(weights, lambda = 0.01) {
+  let sum = 0;
+  for (let i = 0; i < weights.length; i++) sum += Math.abs(weights[i]);
+  return lambda * sum;
+}
+
+/**
+ * L2 regularization (Ridge / weight decay).
+ */
+export function l2Penalty(weights, lambda = 0.01) {
+  let sum = 0;
+  for (let i = 0; i < weights.length; i++) sum += weights[i] * weights[i];
+  return 0.5 * lambda * sum;
+}
+
+/**
+ * Elastic net: combination of L1 and L2.
+ */
+export function elasticNetPenalty(weights, lambda = 0.01, ratio = 0.5) {
+  return ratio * l1Penalty(weights, lambda) + (1 - ratio) * l2Penalty(weights, lambda);
 }

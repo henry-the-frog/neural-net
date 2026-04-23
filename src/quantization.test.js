@@ -1,107 +1,71 @@
-// quantization.test.js — Tests for weight quantization
-import { describe, it } from 'node:test';
+// quantization.test.js
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  quantizeAbsmaxINT8, dequantizeINT8,
-  quantizeGroupINT4, dequantizeINT4,
-  quantizationError, compressionRatio
-} from './quantization.js';
+import { quantizeAbsmax, dequantizeAbsmax, quantizePerChannel, dequantizePerChannel, quantizationError, compressionRatio } from './quantization.js';
 import { Matrix } from './matrix.js';
 
 describe('Quantization', () => {
-  describe('INT8 absmax quantization', () => {
-    it('roundtrip preserves approximate values', () => {
-      const mat = Matrix.random(4, 4);
-      const q = quantizeAbsmaxINT8(mat);
-      const deq = dequantizeINT8(q);
-      const err = quantizationError(mat, deq);
-      assert.ok(err < 0.05, `Error should be small: ${err}`);
-    });
-
-    it('quantized values are in INT8 range', () => {
-      const mat = Matrix.random(3, 3);
-      const q = quantizeAbsmaxINT8(mat);
-      for (const v of q.quantized) {
-        assert.ok(v >= -127 && v <= 127, `Value ${v} out of range`);
-      }
-    });
-
-    it('zero matrix quantizes to zeros', () => {
-      const mat = Matrix.zeros(2, 2);
-      const q = quantizeAbsmaxINT8(mat);
-      for (const v of q.quantized) assert.equal(v, 0);
-    });
-
-    it('preserves relative magnitudes', () => {
-      const mat = new Matrix(1, 4);
-      mat.set(0, 0, 0.1); mat.set(0, 1, 0.5); mat.set(0, 2, -0.3); mat.set(0, 3, 1.0);
-      const q = quantizeAbsmaxINT8(mat);
-      const deq = dequantizeINT8(q);
-      assert.ok(deq.get(0, 3) > deq.get(0, 1), 'Largest value should stay largest');
-      assert.ok(deq.get(0, 1) > deq.get(0, 0), 'Order preserved');
-    });
+  test('absmax roundtrip preserves shape', () => {
+    const w = Matrix.random(4, 8);
+    const q = quantizeAbsmax(w);
+    const dq = dequantizeAbsmax(q);
+    assert.equal(dq.rows, 4);
+    assert.equal(dq.cols, 8);
   });
 
-  describe('INT4 group quantization', () => {
-    it('roundtrip produces reasonable approximation', () => {
-      const mat = Matrix.random(8, 8);
-      const q = quantizeGroupINT4(mat, 16);
-      const deq = dequantizeINT4(q);
-      const err = quantizationError(mat, deq);
-      console.log(`  INT4 error: ${err.toFixed(6)}`);
-      assert.ok(err < 0.2, `Error should be manageable: ${err}`);
-    });
-
-    it('group size affects accuracy', () => {
-      const mat = Matrix.random(16, 16);
-      
-      const q_small = quantizeGroupINT4(mat, 8);   // smaller groups = more scales = better
-      const q_large = quantizeGroupINT4(mat, 128);  // larger groups = fewer scales = worse
-      
-      const err_small = quantizationError(mat, dequantizeINT4(q_small));
-      const err_large = quantizationError(mat, dequantizeINT4(q_large));
-      
-      console.log(`  Group 8: ${err_small.toFixed(6)}, Group 128: ${err_large.toFixed(6)}`);
-      assert.ok(err_small <= err_large + 0.01, 'Smaller groups should be more accurate');
-    });
-
-    it('handles odd-sized matrices', () => {
-      const mat = Matrix.random(3, 5); // 15 elements, not divisible by 2
-      const q = quantizeGroupINT4(mat, 8);
-      const deq = dequantizeINT4(q);
-      assert.equal(deq.rows, 3);
-      assert.equal(deq.cols, 5);
-    });
+  test('absmax roundtrip has low error', () => {
+    const w = Matrix.random(10, 10);
+    const q = quantizeAbsmax(w);
+    const dq = dequantizeAbsmax(q);
+    const err = quantizationError(w, dq);
+    assert.ok(err.rmse < 0.01, `RMSE ${err.rmse} should be small`);
   });
 
-  describe('compression ratio', () => {
-    it('INT8 gives ~8x compression vs FP64', () => {
-      const mat = Matrix.random(100, 100);
-      const ratio = compressionRatio(mat, 8);
-      console.log(`  INT8 compression: ${ratio.toFixed(1)}x`);
-      assert.ok(ratio > 7, `Expected ~8x, got ${ratio}x`);
-    });
-
-    it('INT4 gives ~16x compression vs FP64', () => {
-      const mat = Matrix.random(100, 100);
-      const ratio = compressionRatio(mat, 4);
-      console.log(`  INT4 compression: ${ratio.toFixed(1)}x`);
-      assert.ok(ratio > 12, `Expected ~16x, got ${ratio}x`);
-    });
+  test('per-channel roundtrip preserves shape', () => {
+    const w = Matrix.random(4, 8);
+    const q = quantizePerChannel(w);
+    const dq = dequantizePerChannel(q);
+    assert.equal(dq.rows, 4);
+    assert.equal(dq.cols, 8);
   });
 
-  describe('accuracy comparison', () => {
-    it('INT8 is more accurate than INT4', () => {
-      const mat = Matrix.random(32, 32);
-      
-      const q8 = quantizeAbsmaxINT8(mat);
-      const q4 = quantizeGroupINT4(mat, 32);
-      
-      const err8 = quantizationError(mat, dequantizeINT8(q8));
-      const err4 = quantizationError(mat, dequantizeINT4(q4));
-      
-      console.log(`  INT8 error: ${err8.toFixed(6)}, INT4 error: ${err4.toFixed(6)}`);
-      assert.ok(err8 < err4, 'INT8 should be more accurate than INT4');
-    });
+  test('per-channel is more accurate than absmax for variable scales', () => {
+    const w = new Matrix(4, 4);
+    // Row 0: small values, Row 3: large values
+    for (let j = 0; j < 4; j++) {
+      w.set(0, j, 0.001 * (j + 1));
+      w.set(1, j, 0.1 * (j + 1));
+      w.set(2, j, 1.0 * (j + 1));
+      w.set(3, j, 100.0 * (j + 1));
+    }
+    
+    const absErr = quantizationError(w, dequantizeAbsmax(quantizeAbsmax(w)));
+    const chanErr = quantizationError(w, dequantizePerChannel(quantizePerChannel(w)));
+    
+    assert.ok(chanErr.rmse < absErr.rmse, 
+      `Per-channel RMSE ${chanErr.rmse} should be < absmax ${absErr.rmse}`);
+  });
+
+  test('compression ratio is ~8x for INT8', () => {
+    const w = Matrix.random(100, 100);
+    const q = quantizeAbsmax(w);
+    const ratio = compressionRatio(w, q);
+    assert.ok(ratio.ratio.includes('7') || ratio.ratio.includes('8'), 
+      `Expected ~8x compression, got ${ratio.ratio}`);
+  });
+
+  test('quantized values are in [-127, 127]', () => {
+    const w = Matrix.random(10, 10);
+    const q = quantizeAbsmax(w);
+    for (let i = 0; i < q.quantized.length; i++) {
+      assert.ok(q.quantized[i] >= -127 && q.quantized[i] <= 127);
+    }
+  });
+
+  test('SNR is positive for normal weights', () => {
+    const w = Matrix.random(50, 50);
+    const q = quantizeAbsmax(w);
+    const err = quantizationError(w, dequantizeAbsmax(q));
+    assert.ok(err.snr > 30, `SNR ${err.snr.toFixed(1)} dB should be > 30 dB`);
   });
 });

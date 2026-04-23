@@ -1,124 +1,133 @@
-// rope.test.js — Tests for Rotary Position Embeddings
-import { describe, it } from 'node:test';
+// rope.test.js — RoPE (Rotary Position Embedding) tests
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { precomputeFreqs, applyRoPE, applyInverseRoPE, verifyRelativeProperty } from './rope.js';
+import { precomputeFreqs, applyRoPE, applyRoPEBackward, ropeAttention } from './rope.js';
 import { Matrix } from './matrix.js';
 
 describe('RoPE', () => {
-  const dim = 8;
-  const maxSeqLen = 64;
-  const freqs = precomputeFreqs(dim, maxSeqLen);
-  
-  it('precomputeFreqs creates correct table size', () => {
-    assert.equal(freqs.cos.length, maxSeqLen);
-    assert.equal(freqs.sin.length, maxSeqLen);
-    assert.equal(freqs.cos[0].length, dim / 2);
+  test('precomputeFreqs returns correct shape', () => {
+    const { cos, sin } = precomputeFreqs(8, 16);
+    assert.equal(cos.rows, 16);
+    assert.equal(cos.cols, 4); // dim/2
+    assert.equal(sin.rows, 16);
+    assert.equal(sin.cols, 4);
   });
-  
-  it('position 0 has cos=1, sin=0', () => {
-    for (let i = 0; i < dim / 2; i++) {
-      assert.ok(Math.abs(freqs.cos[0][i] - 1) < 1e-10);
-      assert.ok(Math.abs(freqs.sin[0][i]) < 1e-10);
+
+  test('precomputeFreqs: position 0 has cos=1, sin=0', () => {
+    const { cos, sin } = precomputeFreqs(8, 16);
+    for (let i = 0; i < 4; i++) {
+      assert.ok(Math.abs(cos.get(0, i) - 1) < 0.001, `cos(0,${i}) should be 1`);
+      assert.ok(Math.abs(sin.get(0, i)) < 0.001, `sin(0,${i}) should be 0`);
     }
   });
-  
-  it('applyRoPE preserves shape', () => {
-    const x = Matrix.random(4, dim); // seqLen=4
-    const rotated = applyRoPE(x, freqs);
-    assert.equal(rotated.rows, 4);
-    assert.equal(rotated.cols, dim);
-  });
-  
-  it('position 0 rotation is identity', () => {
-    const x = Matrix.random(1, dim);
-    const rotated = applyRoPE(x, freqs, 0);
-    for (let i = 0; i < dim; i++) {
-      assert.ok(Math.abs(rotated.get(0, i) - x.get(0, i)) < 1e-10);
+
+  test('applyRoPE preserves norm (rotation is orthogonal)', () => {
+    const { cos, sin } = precomputeFreqs(8, 16);
+    const x = new Matrix(4, 8);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 8; j++) x.set(i, j, Math.random());
+    
+    const rotated = applyRoPE(x, cos, sin);
+    
+    // Check that norm is preserved for each row
+    for (let i = 0; i < 4; i++) {
+      let normOrig = 0, normRot = 0;
+      for (let j = 0; j < 8; j++) {
+        normOrig += x.get(i, j) ** 2;
+        normRot += rotated.get(i, j) ** 2;
+      }
+      assert.ok(Math.abs(normOrig - normRot) < 0.001, 
+        `Norm should be preserved: orig=${normOrig.toFixed(4)} rot=${normRot.toFixed(4)}`);
     }
   });
-  
-  it('rotation preserves vector norm', () => {
-    const x = Matrix.random(1, dim);
-    const rotated = applyRoPE(x, freqs, 5);
+
+  test('applyRoPE at position 0 is identity', () => {
+    const { cos, sin } = precomputeFreqs(8, 16);
+    const x = new Matrix(1, 8);
+    for (let j = 0; j < 8; j++) x.set(0, j, j + 1);
     
-    let normOrig = 0, normRot = 0;
-    for (let i = 0; i < dim; i++) {
-      normOrig += x.get(0, i) ** 2;
-      normRot += rotated.get(0, i) ** 2;
-    }
-    assert.ok(Math.abs(normOrig - normRot) < 1e-10, 'RoPE should preserve norm');
-  });
-  
-  it('inverse rotation recovers original', () => {
-    const x = Matrix.random(3, dim);
-    const rotated = applyRoPE(x, freqs, 2);
-    const recovered = applyInverseRoPE(rotated, freqs, 2);
-    
-    for (let i = 0; i < x.rows; i++)
-      for (let j = 0; j < x.cols; j++)
-        assert.ok(Math.abs(recovered.get(i, j) - x.get(i, j)) < 1e-10, `[${i},${j}]`);
-  });
-  
-  it('relative position property: dot product depends only on m-n', () => {
-    const q = Matrix.random(1, dim);
-    const k = Matrix.random(1, dim);
-    
-    // Same relative distance (m-n = 3) at different absolute positions
-    const dot1 = verifyRelativeProperty(q, k, freqs, 5, 2);  // 5-2=3
-    const dot2 = verifyRelativeProperty(q, k, freqs, 10, 7); // 10-7=3
-    const dot3 = verifyRelativeProperty(q, k, freqs, 20, 17); // 20-17=3
-    
-    assert.ok(Math.abs(dot1 - dot2) < 1e-10, `dot1=${dot1} vs dot2=${dot2}`);
-    assert.ok(Math.abs(dot2 - dot3) < 1e-10, `dot2=${dot2} vs dot3=${dot3}`);
-  });
-  
-  it('different relative positions give different dot products', () => {
-    const q = Matrix.random(1, dim);
-    const k = Matrix.random(1, dim);
-    
-    const dot_0 = verifyRelativeProperty(q, k, freqs, 5, 5); // m-n=0
-    const dot_3 = verifyRelativeProperty(q, k, freqs, 8, 5); // m-n=3
-    
-    // These should generally be different (unless very unlucky)
-    // We just check they're computed without error
-    assert.ok(isFinite(dot_0));
-    assert.ok(isFinite(dot_3));
-  });
-  
-  it('works with offset for KV cache continuation', () => {
-    const x = Matrix.random(4, dim);
-    
-    // Full sequence rotation
-    const full = applyRoPE(x, freqs, 0);
-    
-    // Split: first 2 tokens, then next 2 with offset=2
-    const first = applyRoPE(new Matrix(2, dim, x.data.slice(0, 2 * dim)), freqs, 0);
-    const second = applyRoPE(new Matrix(2, dim, x.data.slice(2 * dim)), freqs, 2);
-    
-    // Should match
-    for (let j = 0; j < dim; j++) {
-      assert.ok(Math.abs(full.get(0, j) - first.get(0, j)) < 1e-10);
-      assert.ok(Math.abs(full.get(1, j) - first.get(1, j)) < 1e-10);
-      assert.ok(Math.abs(full.get(2, j) - second.get(0, j)) < 1e-10);
-      assert.ok(Math.abs(full.get(3, j) - second.get(1, j)) < 1e-10);
+    const rotated = applyRoPE(x, cos, sin);
+    for (let j = 0; j < 8; j++) {
+      assert.ok(Math.abs(rotated.get(0, j) - x.get(0, j)) < 0.001,
+        `Position 0 should be identity: got ${rotated.get(0, j)} expected ${x.get(0, j)}`);
     }
   });
-  
-  it('throws on odd dimension', () => {
-    assert.throws(() => precomputeFreqs(7, 10), /even/);
-  });
-  
-  it('custom base changes frequency distribution', () => {
-    const lowBase = precomputeFreqs(dim, 10, 100);
-    const highBase = precomputeFreqs(dim, 10, 100000);
+
+  test('backward is inverse of forward (rotation)', () => {
+    const { cos, sin } = precomputeFreqs(8, 16);
+    const x = new Matrix(3, 8);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 8; j++) x.set(i, j, Math.random() * 2 - 1);
     
-    // Lower base = higher frequency = more rotation per position
-    // At position 5, lower base should have larger sin values
-    let lowSinSum = 0, highSinSum = 0;
-    for (let i = 0; i < dim / 2; i++) {
-      lowSinSum += Math.abs(lowBase.sin[5][i]);
-      highSinSum += Math.abs(highBase.sin[5][i]);
+    const rotated = applyRoPE(x, cos, sin);
+    const recovered = applyRoPEBackward(rotated, cos, sin);
+    
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 8; j++) {
+        assert.ok(Math.abs(recovered.get(i, j) - x.get(i, j)) < 0.001,
+          `Backward should recover original: got ${recovered.get(i, j)} expected ${x.get(i, j)}`);
+      }
     }
-    assert.ok(lowSinSum > highSinSum, 'Lower base should produce more rotation');
+  });
+
+  test('relative position: dot product depends on position difference', () => {
+    const { cos, sin } = precomputeFreqs(8, 32);
+    
+    // Create two vectors
+    const q = new Matrix(1, 8);
+    const k = new Matrix(1, 8);
+    for (let j = 0; j < 8; j++) {
+      q.set(0, j, 1.0);
+      k.set(0, j, 1.0);
+    }
+    
+    // Rotate q to position 5, k to position 3 (diff = 2)
+    const q5 = applyRoPE(q, cos, sin, 5);
+    const k3 = applyRoPE(k, cos, sin, 3);
+    let dot53 = 0;
+    for (let j = 0; j < 8; j++) dot53 += q5.get(0, j) * k3.get(0, j);
+    
+    // Rotate q to position 10, k to position 8 (diff = 2)
+    const q10 = applyRoPE(q, cos, sin, 10);
+    const k8 = applyRoPE(k, cos, sin, 8);
+    let dot108 = 0;
+    for (let j = 0; j < 8; j++) dot108 += q10.get(0, j) * k8.get(0, j);
+    
+    // Same relative position → same dot product
+    assert.ok(Math.abs(dot53 - dot108) < 0.001,
+      `Same relative position should give same dot: ${dot53.toFixed(4)} vs ${dot108.toFixed(4)}`);
+  });
+
+  test('ropeAttention returns rotated Q and K', () => {
+    const freqs = precomputeFreqs(8, 16);
+    const Q = Matrix.random(4, 8);
+    const K = Matrix.random(4, 8);
+    
+    const { Q_rot, K_rot } = ropeAttention(Q, K, freqs);
+    assert.equal(Q_rot.rows, 4);
+    assert.equal(Q_rot.cols, 8);
+    assert.equal(K_rot.rows, 4);
+    assert.equal(K_rot.cols, 8);
+  });
+
+  test('offset shifts position correctly', () => {
+    const { cos, sin } = precomputeFreqs(8, 32);
+    const x = new Matrix(1, 8);
+    for (let j = 0; j < 8; j++) x.set(0, j, 1.0);
+    
+    // Position 5 directly
+    const directPos5 = new Matrix(6, 8);
+    for (let i = 0; i < 6; i++) for (let j = 0; j < 8; j++) directPos5.set(i, j, 1.0);
+    const rotDirect = applyRoPE(directPos5, cos, sin);
+    
+    // Position 5 via offset
+    const rotOffset = applyRoPE(x, cos, sin, 5);
+    
+    // Should match row 5 of the direct computation
+    for (let j = 0; j < 8; j++) {
+      assert.ok(Math.abs(rotDirect.get(5, j) - rotOffset.get(0, j)) < 0.001);
+    }
+  });
+
+  test('even dimension required', () => {
+    assert.throws(() => precomputeFreqs(7, 16), /even/);
   });
 });

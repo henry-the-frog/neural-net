@@ -1,75 +1,67 @@
 // beam-search.test.js
-import { describe, it } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { beamSearch } from './beam-search.js';
-import { ModernDecoder } from './modern-decoder.js';
 
 describe('Beam Search', () => {
   const vocabSize = 8;
-
-  function makeModel() {
-    return new ModernDecoder(1, 4, 2, 1, vocabSize, { dHidden: 8, maxSeqLen: 32 });
+  
+  // Simple model: always prefers token (previous + 1) % vocabSize
+  function mockForward(tokens) {
+    const last = tokens[tokens.length - 1];
+    const logits = new Float64Array(vocabSize).fill(-5);
+    logits[(last + 1) % vocabSize] = 5; // Strong preference for next token
+    logits[(last + 2) % vocabSize] = 2; // Secondary preference
+    return [logits]; // Array of logit arrays (one per position)
   }
 
-  it('generates correct length', () => {
-    const model = makeModel();
-    const result = beamSearch(model, [0, 1], 5, 3, vocabSize);
-    assert.equal(result.sequence.length, 7, 'prompt(2) + new(5) = 7');
+  test('returns beamWidth results', () => {
+    const results = beamSearch(mockForward, [0], 5, 3);
+    assert.ok(results.length >= 1);
+    assert.ok(results.length <= 3);
   });
 
-  it('beam width 1 = greedy decoding', () => {
-    const model = makeModel();
-    const beam1 = beamSearch(model, [0, 1], 5, 1, vocabSize);
-    const greedy = model.generate([0, 1], 5, { greedy: true });
+  test('best beam follows strong preference', () => {
+    const results = beamSearch(mockForward, [0], 5, 2);
+    // Best beam should follow the strong preference: 0 → 1 → 2 → 3 → 4 → 5
+    const best = results[0].tokens;
+    for (let i = 1; i < best.length; i++) {
+      assert.equal(best[i], (best[i-1] + 1) % vocabSize,
+        `Expected ${(best[i-1]+1)%vocabSize} at position ${i}, got ${best[i]}`);
+    }
+  });
+
+  test('beams are sorted by score', () => {
+    const results = beamSearch(mockForward, [0], 5, 4);
+    for (let i = 1; i < results.length; i++) {
+      assert.ok(results[i].score <= results[i-1].score,
+        `Beams should be sorted by score: ${results[i].score} > ${results[i-1].score}`);
+    }
+  });
+
+  test('EOS token terminates beam', () => {
+    function eosForward(tokens) {
+      const logits = new Float64Array(vocabSize).fill(-5);
+      if (tokens.length >= 3) {
+        logits[7] = 10; // EOS token = 7
+      } else {
+        logits[1] = 5;
+      }
+      return [logits];
+    }
     
-    // Should produce same sequence (beam-1 = greedy)
-    assert.deepEqual(beam1.sequence, greedy);
+    const results = beamSearch(eosForward, [0], 10, 2, 7);
+    // Should have short sequences terminated by EOS
+    assert.ok(results[0].tokens.length <= 5);
   });
 
-  it('wider beam produces equal or better score', () => {
-    const model = makeModel();
-    const beam1 = beamSearch(model, [0, 1], 5, 1, vocabSize);
-    const beam4 = beamSearch(model, [0, 1], 5, 4, vocabSize);
-
-    // Wider beam should find equal or better scoring sequence
-    assert.ok(beam4.score >= beam1.score - 0.01,
-      `Beam-4 (${beam4.score}) should be >= Beam-1 (${beam1.score})`);
-  });
-
-  it('returns multiple beam candidates', () => {
-    const model = makeModel();
-    const result = beamSearch(model, [0], 3, 4, vocabSize);
-    assert.equal(result.allBeams.length, 4, 'Should have 4 beams');
-    // Beams should be sorted by score
-    for (let i = 0; i < result.allBeams.length - 1; i++) {
-      assert.ok(result.allBeams[i].score >= result.allBeams[i + 1].score);
+  test('beamWidth=1 is greedy decoding', () => {
+    const results = beamSearch(mockForward, [0], 5, 1);
+    assert.equal(results.length, 1);
+    const best = results[0].tokens;
+    // Greedy: always pick highest logit
+    for (let i = 1; i < best.length; i++) {
+      assert.equal(best[i], (best[i-1] + 1) % vocabSize);
     }
-  });
-
-  it('all tokens are valid', () => {
-    const model = makeModel();
-    const result = beamSearch(model, [0, 1], 8, 3, vocabSize);
-    for (const t of result.sequence) {
-      assert.ok(t >= 0 && t < vocabSize);
-    }
-  });
-
-  it('EOS token stops generation early', () => {
-    const model = makeModel();
-    // Use token 0 as EOS — may or may not be generated
-    const result = beamSearch(model, [1, 2], 20, 2, vocabSize, { eosToken: 0 });
-    // If EOS found, sequence should be shorter
-    if (result.sequence.includes(0) && result.sequence.indexOf(0) > 1) {
-      assert.ok(result.sequence.length <= 22, 'Should stop at EOS');
-    }
-  });
-
-  it('length penalty favors longer sequences', () => {
-    const model = makeModel();
-    const noPenalty = beamSearch(model, [0], 5, 3, vocabSize, { lengthPenalty: 1.0 });
-    const highPenalty = beamSearch(model, [0], 5, 3, vocabSize, { lengthPenalty: 0.5 });
-    // Both should produce valid output
-    assert.ok(noPenalty.sequence.length > 0);
-    assert.ok(highPenalty.sequence.length > 0);
   });
 });

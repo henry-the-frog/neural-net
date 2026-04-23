@@ -15,6 +15,8 @@ export class GAN {
     dataSize,
     generatorLayers = [],
     discriminatorLayers = [],
+    generatorOutputActivation = 'sigmoid',  // 'sigmoid' | 'tanh' | 'none' | 'linear'
+    lossType = 'mse',
   }) {
     this.latentDim = latentDim;
     this.dataSize = dataSize;
@@ -26,7 +28,10 @@ export class GAN {
       this.generator.push(new Dense(prevSize, h, 'relu'));
       prevSize = h;
     }
-    this.generator.push(new Dense(prevSize, dataSize, 'sigmoid'));
+    const outAct = generatorOutputActivation === 'none' || generatorOutputActivation === 'linear'
+      ? 'linear' : generatorOutputActivation;
+    this.generator.push(new Dense(prevSize, dataSize, outAct));
+    this.generatorOutputActivation = generatorOutputActivation;
     
     // Build discriminator: dataSize → hidden → 1
     this.discriminator = [];
@@ -37,7 +42,7 @@ export class GAN {
     }
     this.discriminator.push(new Dense(prevSize, 1, 'sigmoid'));
     
-    this.loss = getLoss('mse'); // Binary cross-entropy approximated by MSE
+    this.loss = getLoss(lossType);
   }
   
   // Forward through generator

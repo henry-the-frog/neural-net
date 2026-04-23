@@ -1,131 +1,116 @@
-// rope.js — Rotary Position Embeddings (Su et al., 2021)
+// rope.js — Rotary Position Embedding (RoPE)
+// Paper: "RoFormer: Enhanced Transformer with Rotary Position Embedding" (Su et al., 2021)
 //
-// Used in GPT-NeoX, Llama, Mistral, and most modern LLMs.
-// Key idea: encode position by rotating Q and K vectors in the complex plane.
-// The attention score Q_m · K_n depends only on the relative position (m-n),
-// not absolute positions.
-//
-// For each pair of dimensions (2i, 2i+1):
-//   θ_i = 1 / base^(2i/d)
-//   q'[2i]   = q[2i] * cos(m * θ_i) - q[2i+1] * sin(m * θ_i)
-//   q'[2i+1] = q[2i] * sin(m * θ_i) + q[2i+1] * cos(m * θ_i)
-// where m is the position index.
+// Key idea: encode position by rotating query/key vectors in 2D pairs.
+// For positions m,n: dot(RoPE(q,m), RoPE(k,n)) depends only on q·k and (m-n).
+// This gives relative position sensitivity without explicit position embeddings.
 
 import { Matrix } from './matrix.js';
 
 /**
- * Precompute rotation frequencies for given dimensions and max sequence length.
- * @param {number} dim — head dimension (must be even)
- * @param {number} maxSeqLen — maximum sequence length
- * @param {number} [base=10000] — frequency base
- * @returns {{ cos: Float64Array[], sin: Float64Array[] }}
+ * Precompute frequency basis for RoPE.
+ * θ_i = 1 / (10000^(2i/d)) for i in [0, d/2)
+ * @param {number} dim - Embedding dimension (must be even)
+ * @param {number} maxLen - Maximum sequence length
+ * @param {number} base - Base for frequency computation (default 10000)
+ * @returns {{ cos: Matrix, sin: Matrix }} Precomputed cos/sin tables (maxLen × dim/2)
  */
-export function precomputeFreqs(dim, maxSeqLen, base = 10000) {
-  if (dim % 2 !== 0) throw new Error('RoPE dimension must be even');
-  
+export function precomputeFreqs(dim, maxLen, base = 10000) {
+  if (dim % 2 !== 0) throw new Error('RoPE requires even embedding dimension');
   const halfDim = dim / 2;
-  const freqs = new Float64Array(halfDim);
   
-  for (let i = 0; i < halfDim; i++) {
-    freqs[i] = 1.0 / Math.pow(base, (2 * i) / dim);
-  }
+  const cos = new Matrix(maxLen, halfDim);
+  const sin = new Matrix(maxLen, halfDim);
   
-  const cosTable = [];
-  const sinTable = [];
-  
-  for (let pos = 0; pos < maxSeqLen; pos++) {
-    const cosRow = new Float64Array(halfDim);
-    const sinRow = new Float64Array(halfDim);
+  for (let pos = 0; pos < maxLen; pos++) {
     for (let i = 0; i < halfDim; i++) {
-      const angle = pos * freqs[i];
-      cosRow[i] = Math.cos(angle);
-      sinRow[i] = Math.sin(angle);
-    }
-    cosTable.push(cosRow);
-    sinTable.push(sinRow);
-  }
-  
-  return { cos: cosTable, sin: sinTable, freqs };
-}
-
-/**
- * Apply RoPE to a matrix of Q or K vectors.
- * @param {Matrix} x — [seqLen, dim] matrix of Q or K vectors
- * @param {{ cos: Float64Array[], sin: Float64Array[] }} freqTable — precomputed frequencies
- * @param {number} [offset=0] — position offset (for KV cache continuation)
- * @returns {Matrix} — rotated [seqLen, dim]
- */
-export function applyRoPE(x, freqTable, offset = 0) {
-  const seqLen = x.rows;
-  const dim = x.cols;
-  const halfDim = dim / 2;
-  const result = new Matrix(seqLen, dim);
-  
-  for (let pos = 0; pos < seqLen; pos++) {
-    const absPos = pos + offset;
-    const cosRow = freqTable.cos[absPos];
-    const sinRow = freqTable.sin[absPos];
-    
-    for (let i = 0; i < halfDim; i++) {
-      const x0 = x.get(pos, 2 * i);
-      const x1 = x.get(pos, 2 * i + 1);
-      
-      // Complex rotation: (x0 + ix1) * (cos + i*sin)
-      result.set(pos, 2 * i,     x0 * cosRow[i] - x1 * sinRow[i]);
-      result.set(pos, 2 * i + 1, x0 * sinRow[i] + x1 * cosRow[i]);
+      const theta = pos / Math.pow(base, (2 * i) / dim);
+      cos.set(pos, i, Math.cos(theta));
+      sin.set(pos, i, Math.sin(theta));
     }
   }
   
-  return result;
+  return { cos, sin };
 }
 
 /**
- * Apply inverse RoPE (for backward pass).
- * Since rotation by θ is undone by rotation by -θ:
- * just negate the sin terms.
- */
-export function applyInverseRoPE(x, freqTable, offset = 0) {
-  const seqLen = x.rows;
-  const dim = x.cols;
-  const halfDim = dim / 2;
-  const result = new Matrix(seqLen, dim);
-  
-  for (let pos = 0; pos < seqLen; pos++) {
-    const absPos = pos + offset;
-    const cosRow = freqTable.cos[absPos];
-    const sinRow = freqTable.sin[absPos];
-    
-    for (let i = 0; i < halfDim; i++) {
-      const x0 = x.get(pos, 2 * i);
-      const x1 = x.get(pos, 2 * i + 1);
-      
-      // Inverse rotation: (x0 + ix1) * (cos - i*sin)
-      result.set(pos, 2 * i,     x0 * cosRow[i] + x1 * sinRow[i]);
-      result.set(pos, 2 * i + 1, -x0 * sinRow[i] + x1 * cosRow[i]);
-    }
-  }
-  
-  return result;
-}
-
-/**
- * Key property of RoPE: the dot product between rotated Q at position m
- * and rotated K at position n depends only on (m-n).
+ * Apply rotary position embedding to query or key vectors.
+ * For each pair (x_{2i}, x_{2i+1}), rotate by angle θ_i * position:
+ *   x'_{2i}   = x_{2i} * cos(θ) - x_{2i+1} * sin(θ)
+ *   x'_{2i+1} = x_{2i} * sin(θ) + x_{2i+1} * cos(θ)
  * 
- * This function verifies this property for a given pair of vectors.
+ * @param {Matrix} x - Input vectors (seqLen × dim)
+ * @param {Matrix} freqCos - Cosine table from precomputeFreqs (seqLen × dim/2)
+ * @param {Matrix} freqSin - Sine table from precomputeFreqs (seqLen × dim/2)
+ * @param {number} offset - Position offset (for KV cache sliding window)
+ * @returns {Matrix} Rotated vectors (seqLen × dim)
  */
-export function verifyRelativeProperty(q, k, freqTable, posM, posN) {
-  const qRot = applyRoPE(q, freqTable, posM);
-  const kRot = applyRoPE(k, freqTable, posN);
+export function applyRoPE(x, freqCos, freqSin, offset = 0) {
+  const seqLen = x.rows;
+  const dim = x.cols;
+  const halfDim = dim / 2;
+  const result = new Matrix(seqLen, dim);
   
-  // Dot product
-  let dot = 0;
-  for (let i = 0; i < qRot.cols; i++) {
-    dot += qRot.get(0, i) * kRot.get(0, i);
+  for (let pos = 0; pos < seqLen; pos++) {
+    const freqPos = pos + offset;
+    for (let i = 0; i < halfDim; i++) {
+      const x0 = x.get(pos, 2 * i);
+      const x1 = x.get(pos, 2 * i + 1);
+      const c = freqCos.get(freqPos, i);
+      const s = freqSin.get(freqPos, i);
+      
+      result.set(pos, 2 * i,     x0 * c - x1 * s);
+      result.set(pos, 2 * i + 1, x0 * s + x1 * c);
+    }
   }
-  return dot;
+  
+  return result;
 }
 
-// Aliases for backward compatibility with gqa-attention.js
-export { precomputeFreqs as precomputeRoPE };
-export { applyRoPE as applyRoPEToSequence };
+/**
+ * Backward pass for RoPE: compute gradient of loss w.r.t. input x.
+ * Since RoPE is a rotation (orthogonal), the backward is the inverse rotation.
+ * 
+ * @param {Matrix} dOutput - Gradient of loss w.r.t. rotated output
+ * @param {Matrix} freqCos - Cosine table
+ * @param {Matrix} freqSin - Sine table
+ * @param {number} offset - Position offset
+ * @returns {Matrix} Gradient w.r.t. input x
+ */
+export function applyRoPEBackward(dOutput, freqCos, freqSin, offset = 0) {
+  const seqLen = dOutput.rows;
+  const dim = dOutput.cols;
+  const halfDim = dim / 2;
+  const dInput = new Matrix(seqLen, dim);
+  
+  for (let pos = 0; pos < seqLen; pos++) {
+    const freqPos = pos + offset;
+    for (let i = 0; i < halfDim; i++) {
+      const dy0 = dOutput.get(pos, 2 * i);
+      const dy1 = dOutput.get(pos, 2 * i + 1);
+      const c = freqCos.get(freqPos, i);
+      const s = freqSin.get(freqPos, i);
+      
+      // Inverse rotation: R^(-1) = R^T (since R is orthogonal)
+      // [cos θ, sin θ] [dy0]
+      // [-sin θ, cos θ] [dy1]
+      dInput.set(pos, 2 * i,     dy0 * c + dy1 * s);
+      dInput.set(pos, 2 * i + 1, -dy0 * s + dy1 * c);
+    }
+  }
+  
+  return dInput;
+}
+
+/**
+ * RoPE-enhanced attention: compute attention scores with rotary embeddings.
+ * @param {Matrix} Q - Queries (seqLen × headDim)
+ * @param {Matrix} K - Keys (seqLen × headDim)
+ * @param {object} freqs - { cos, sin } from precomputeFreqs
+ * @returns {{ Q_rot: Matrix, K_rot: Matrix }} Rotated Q and K
+ */
+export function ropeAttention(Q, K, freqs) {
+  const Q_rot = applyRoPE(Q, freqs.cos, freqs.sin);
+  const K_rot = applyRoPE(K, freqs.cos, freqs.sin);
+  return { Q_rot, K_rot };
+}
