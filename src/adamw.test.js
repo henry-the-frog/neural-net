@@ -2,6 +2,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { AdamW, SGDMomentum } from './adamw.js';
+import { Matrix } from './matrix.js';
 
 describe('AdamW Optimizer', () => {
   it('converges on simple quadratic', () => {
@@ -15,6 +16,24 @@ describe('AdamW Optimizer', () => {
     }
 
     assert.ok(Math.abs(param[0]) < 0.1, `Should converge to 0: ${param[0]}`);
+  });
+
+  it('works with Matrix objects (regression: was silently no-op)', () => {
+    const opt = new AdamW({ lr: 0.1, weightDecay: 0 });
+    const param = new Matrix(2, 2, new Float64Array([5, -3, 2, -1]));
+    const origValues = [...param.data];
+
+    for (let i = 0; i < 50; i++) {
+      // Gradient: 2 * param (minimize sum of squares)
+      const grad = new Matrix(2, 2, new Float64Array(param.data.map(v => 2 * v)));
+      opt.update('W', param, grad);
+    }
+
+    // All values should have moved toward 0
+    for (let i = 0; i < 4; i++) {
+      assert.ok(Math.abs(param.data[i]) < Math.abs(origValues[i]),
+        `param[${i}] should decrease: ${origValues[i]} → ${param.data[i]}`);
+    }
   });
 
   it('weight decay pushes params toward zero', () => {
@@ -75,5 +94,18 @@ describe('SGD with Momentum', () => {
     }
 
     assert.ok(Math.abs(param[0]) < 0.5, `Should converge: ${param[0]}`);
+  });
+
+  it('works with Matrix objects', () => {
+    const opt = new SGDMomentum({ lr: 0.01, momentum: 0.9 });
+    const param = new Matrix(1, 2, new Float64Array([5.0, -3.0]));
+
+    for (let i = 0; i < 200; i++) {
+      const grad = new Matrix(1, 2, new Float64Array(param.data.map(v => 2 * v)));
+      opt.update('x', param, grad);
+    }
+
+    assert.ok(Math.abs(param.data[0]) < 0.5, `Should converge: ${param.data[0]}`);
+    assert.ok(Math.abs(param.data[1]) < 0.5, `Should converge: ${param.data[1]}`);
   });
 });
