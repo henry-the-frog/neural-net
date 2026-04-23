@@ -225,3 +225,97 @@ export class ExponentialDecay {
   getStep() { return this._step; }
   reset() { this._step = 0; }
 }
+
+// ========================
+// PyTorch-style aliases (used by test/lr-scheduler-stress.test.js)
+// These accept step as parameter to getLR() for stateless use.
+// ========================
+
+/**
+ * StepLR: multiply by gamma every stepSize steps.
+ * getLR(step) returns lr at given step number.
+ */
+export class StepLR {
+  constructor(lrInit, stepSize, gamma = 0.1) {
+    this.lrInit = lrInit;
+    this.stepSize = stepSize;
+    this.gamma = gamma;
+  }
+  getLR(step) {
+    const decays = Math.floor(step / this.stepSize);
+    return this.lrInit * Math.pow(this.gamma, decays);
+  }
+}
+
+/**
+ * ExponentialLR: lr = lrInit * gamma^step
+ */
+export class ExponentialLR {
+  constructor(lrInit, gamma) {
+    this.lrInit = lrInit;
+    this.gamma = gamma;
+  }
+  getLR(step) {
+    return this.lrInit * Math.pow(this.gamma, step);
+  }
+}
+
+/**
+ * CosineAnnealingLR: cosine decay from lrMax to lrMin over T_max steps.
+ */
+export class CosineAnnealingLR {
+  constructor(lrMax, T_max, lrMin = 0) {
+    this.lrMax = lrMax;
+    this.T_max = T_max;
+    this.lrMin = lrMin;
+  }
+  getLR(step) {
+    const t = Math.min(step, this.T_max);
+    return this.lrMin + 0.5 * (this.lrMax - this.lrMin) * (1 + Math.cos(Math.PI * t / this.T_max));
+  }
+}
+
+/**
+ * WarmupLR: linear ramp from 0 to lrMax over warmupSteps, then constant.
+ */
+export class WarmupLR {
+  constructor(lrMax, warmupSteps) {
+    this.lrMax = lrMax;
+    this.warmupSteps = warmupSteps;
+  }
+  getLR(step) {
+    if (step >= this.warmupSteps) return this.lrMax;
+    return this.lrMax * (step / this.warmupSteps);
+  }
+}
+
+/**
+ * CyclicLR: triangular cycling between baseLR and maxLR.
+ */
+export class CyclicLR {
+  constructor(baseLR, maxLR, stepSize) {
+    this.baseLR = baseLR;
+    this.maxLR = maxLR;
+    this.stepSize = stepSize;
+  }
+  getLR(step) {
+    const cycle = Math.floor(1 + step / (2 * this.stepSize));
+    const x = Math.abs(step / this.stepSize - 2 * cycle + 1);
+    return this.baseLR + (this.maxLR - this.baseLR) * Math.max(0, 1 - x);
+  }
+}
+
+/**
+ * OneCycleLR: one-cycle policy with step-based getLR.
+ */
+export class OneCycleLR extends OneCycle {
+  constructor(lrMax, totalSteps, opts) {
+    super(lrMax, totalSteps, opts);
+  }
+  getLR(step) {
+    if (step !== undefined) {
+      this._step = step;
+    }
+    return super.getLR();
+  }
+}

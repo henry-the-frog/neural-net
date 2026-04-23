@@ -131,9 +131,22 @@ export function dequantizeINT4(q) {
 }
 
 /**
- * Compute quantization error (mean absolute error).
+ * Compute quantization error.
+ * Accepts either Matrix objects or plain arrays.
  */
 export function quantizationError(original, dequantized) {
+  // Array path
+  if (Array.isArray(original)) {
+    let sumSq = 0, maxError = 0;
+    for (let i = 0; i < original.length; i++) {
+      const err = Math.abs(original[i] - dequantized[i]);
+      sumSq += err * err;
+      maxError = Math.max(maxError, err);
+    }
+    const mse = sumSq / original.length;
+    return { mse, rmse: Math.sqrt(mse), maxError };
+  }
+  // Matrix path
   let totalError = 0;
   let count = 0;
   for (let r = 0; r < original.rows; r++) {
@@ -162,4 +175,184 @@ export function compressionRatio(mat, bits) {
     return fp64Bytes / int4Bytes;
   }
   return 1;
+}
+
+// ========================
+// Array-based quantization API (used by test/quantization.test.js)
+// ========================
+
+/**
+ * Uniform quantization of a float array to N-bit integers.
+ * @param {number[]} values - input values
+ * @param {number} bits - bit width (e.g. 4, 8)
+ * @param {boolean} symmetric - if true, symmetric around 0 (default: true)
+ * @returns {{ quantized: number[], scale: number, zeroPoint: number }}
+ */
+export function quantize(values, bits, symmetric = true) {
+  // Handle scalar input
+  const isScalar = typeof values === 'number';
+  if (isScalar) values = [values];
+  
+  const levels = (1 << bits) - 1;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+
+  let scale, zeroPoint;
+  if (symmetric) {
+    const absMax = Math.max(Math.abs(min), Math.abs(max)) || 1e-10;
+    scale = (2 * absMax) / levels;
+    zeroPoint = Math.round(levels / 2);
+  } else {
+    scale = (max - min) / levels || 1e-10;
+    zeroPoint = Math.round(-min / scale);
+  }
+
+  const quantized = values.map(v => {
+    const q = Math.round(v / scale + zeroPoint);
+    return Math.max(0, Math.min(levels, q));
+  });
+
+  if (isScalar) {
+    return { quantized: quantized[0], scale, zeroPoint, _bits: bits };
+  }
+  return { quantized, scale, zeroPoint, _bits: bits };
+}
+
+/**
+ * Dequantize integers back to floats.
+ * Accepts either (quantized, scale, zeroPoint) or ({quantized, scale, zeroPoint}, bits).
+ */
+export function dequantize(quantizedOrObj, scaleOrBits, zeroPoint) {
+  // Handle object input: dequantize(result, bits) where result = quantize output
+  if (typeof quantizedOrObj === 'object' && quantizedOrObj !== null && 'scale' in quantizedOrObj) {
+    const obj = quantizedOrObj;
+    const q = obj.quantized;
+    if (typeof q === 'number') {
+      return (q - obj.zeroPoint) * obj.scale;
+    }
+    return q.map(v => (v - obj.zeroPoint) * obj.scale);
+  }
+  // Array path: dequantize(quantized, scale, zeroPoint)
+  if (Array.isArray(quantizedOrObj)) {
+    return quantizedOrObj.map(q => (q - zeroPoint) * scaleOrBits);
+  }
+  // Scalar
+  return (quantizedOrObj - zeroPoint) * scaleOrBits;
+}
+
+/**
+ * Fake quantization: quantize then immediately dequantize (simulates quantization noise).
+ */
+export function fakeQuantize(values, bits) {
+  const { quantized, scale, zeroPoint } = quantize(values, bits);
+  return dequantize(quantized, scale, zeroPoint);
+}
+
+/**
+ * Per-channel (per-row) quantization of a 2D array.
+ */
+export function quantizePerChannel(matrix, bits) {
+  const quantized = [];
+  const scales = [];
+  const zeroPoints = [];
+
+  for (const row of matrix) {
+    const result = quantize(row, bits);
+    quantized.push(result.quantized);
+    scales.push(result.scale);
+    zeroPoints.push(result.zeroPoint);
+  }
+
+  return { quantized, scales, zeroPoints };
+}
+
+/**
+ * Dequantize per-channel.
+ */
+export function dequantizePerChannel(quantized, scales, zeroPoints) {
+  return quantized.map((row, i) => dequantize(row, scales[i], zeroPoints[i]));
+}
+
+/**
+ * Dynamic quantization: find the minimum bits needed for a target error.
+ */
+export function dynamicQuantize(values, targetRMSE = 0.01) {
+  for (let bits = 2; bits <= 16; bits++) {
+    const fq = fakeQuantize(values, bits);
+    const { rmse } = quantizationError(values, fq);
+    if (rmse <= targetRMSE) {
+      return { bits, error: rmse, quantized: fq };
+    }
+  }
+  return { bits: 16, error: 0, quantized: fakeQuantize(values, 16) };
+}
+
+/**
+ * K-means weight clustering (codebook quantization).
+ */
+export function clusterWeights(weights, k, maxIter = 50) {
+  // Initialize centroids via uniform sampling
+  const sorted = [...weights].sort((a, b) => a - b);
+  let centroids = [];
+  for (let i = 0; i < k; i++) {
+    centroids.push(sorted[Math.floor(i * sorted.length / k)]);
+  }
+
+  let assignments = new Array(weights.length);
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    // Assign each weight to nearest centroid
+    for (let i = 0; i < weights.length; i++) {
+      let minDist = Infinity, bestC = 0;
+      for (let c = 0; c < k; c++) {
+        const d = Math.abs(weights[i] - centroids[c]);
+        if (d < minDist) { minDist = d; bestC = c; }
+      }
+      assignments[i] = bestC;
+    }
+
+    // Recompute centroids
+    const sums = new Array(k).fill(0);
+    const counts = new Array(k).fill(0);
+    for (let i = 0; i < weights.length; i++) {
+      sums[assignments[i]] += weights[i];
+      counts[assignments[i]]++;
+    }
+    const newCentroids = centroids.map((c, i) => counts[i] > 0 ? sums[i] / counts[i] : c);
+    
+    // Check convergence
+    let converged = true;
+    for (let i = 0; i < k; i++) {
+      if (Math.abs(newCentroids[i] - centroids[i]) > 1e-8) { converged = false; break; }
+    }
+    centroids = newCentroids;
+    if (converged) break;
+  }
+
+  // Map weights to centroids
+  const quantized = weights.map((_, i) => centroids[assignments[i]]);
+  const bitsPerWeight = Math.log2(k);
+  const compressionRatio = bitsPerWeight / 32;
+
+  return { centroids, quantized, assignments, compressionRatio };
+}
+
+/**
+ * Quantize a weight matrix to N-bit.
+ * @param {Matrix} mat - weight matrix
+ * @param {number} bits - bit width
+ * @returns {{ quantized: Int8Array, scale: number, zeroPoint: number }}
+ */
+export function quantizeWeights(mat, bits) {
+  const values = Array.from(mat.data);
+  return quantize(values, bits);
+}
+
+/**
+ * Calculate bits required to represent N levels.
+ * @param {number} levels - number of distinct levels
+ * @returns {number} bits needed
+ */
+export function bitsRequired(levels) {
+  return Math.ceil(Math.log2(levels));
 }
