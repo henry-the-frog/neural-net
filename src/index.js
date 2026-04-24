@@ -10,7 +10,7 @@ export * as autograd from './autograd.js';
 
 // Compatibility aliases
 import { sigmoid, tanh, relu, leakyRelu, softmax, linear, getActivation } from './activation.js';
-import { mse, crossEntropy, getLoss } from './loss.js';
+import { mse, crossEntropy, binaryCrossEntropy, cosineSimilarityLoss, hingeLoss, huberLoss, tripletLoss, tripletLossGradient, getLoss } from './loss.js';
 import { Network } from './network.js';
 import { Dense } from './layer.js';
 
@@ -112,7 +112,7 @@ export { crossValidate, kFoldSplit } from './cross-validation.js';
 export { autoML } from './automl.js';
 
 // Loss functions
-export { mse, crossEntropy, getLoss } from './loss.js';
+export { mse, crossEntropy, binaryCrossEntropy, cosineSimilarityLoss, hingeLoss, huberLoss, tripletLoss, tripletLossGradient, getLoss } from './loss.js';
 
 // Evaluation
 export {
