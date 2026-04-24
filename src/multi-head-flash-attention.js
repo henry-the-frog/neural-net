@@ -87,10 +87,7 @@ export class MultiHeadFlashAttention {
         const Vh = extractCols(V, offset, this.headDim);
         
         // Flash attention: O(N·headDim) memory
-        const context = flashAttention(Qh, Kh, Vh, {
-          blockSize: this.blockSize,
-          causal: this.causal,
-        });
+        const context = flashAttention(Qh, Kh, Vh, this.blockSize, this.causal);
         headOutputs.push(context);
       }
       this._allHeadOutputs.push(headOutputs);

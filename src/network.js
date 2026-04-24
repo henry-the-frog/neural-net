@@ -542,26 +542,40 @@ export class Network {
             layer.routerW = new Matrix(d.routerWeightShape[0], d.routerWeightShape[1], new Float64Array(d.routerWeights));
             layer.routerB = new Matrix(d.routerBiasShape[0], d.routerBiasShape[1], new Float64Array(d.routerBiases));
           }
-          // Restore expert weights (SwiGLU FFNs with W1, W2, W3)
+          // Restore expert weights (Dense FFNs with up/down layers)
           if (d.experts && layer.experts) {
             for (let i = 0; i < Math.min(d.experts.length, layer.experts.length); i++) {
               const ed = d.experts[i];
               const expert = layer.experts[i];
-              if (ed.W1) {
-                expert.W1 = new Matrix(ed.W1.shape[0], ed.W1.shape[1], new Float64Array(ed.W1.data));
+              // New format: up/down Dense layers
+              if (ed.up && expert.up) {
+                if (ed.up.weights) {
+                  expert.up.weights = new Matrix(ed.up.weights.shape[0], ed.up.weights.shape[1], new Float64Array(ed.up.weights.data));
+                }
+                if (ed.up.biases) {
+                  expert.up.biases = new Matrix(ed.up.biases.shape[0], ed.up.biases.shape[1], new Float64Array(ed.up.biases.data));
+                }
               }
-              if (ed.b1) {
-                expert.b1 = new Matrix(ed.b1.shape[0], ed.b1.shape[1], new Float64Array(ed.b1.data));
+              if (ed.down && expert.down) {
+                if (ed.down.weights) {
+                  expert.down.weights = new Matrix(ed.down.weights.shape[0], ed.down.weights.shape[1], new Float64Array(ed.down.weights.data));
+                }
+                if (ed.down.biases) {
+                  expert.down.biases = new Matrix(ed.down.biases.shape[0], ed.down.biases.shape[1], new Float64Array(ed.down.biases.data));
+                }
               }
-              if (ed.W2) {
-                expert.W2 = new Matrix(ed.W2.shape[0], ed.W2.shape[1], new Float64Array(ed.W2.data));
+              // Legacy format: W1/b1/W2/b2 (backward compat)
+              if (ed.W1 && expert.up) {
+                expert.up.weights = new Matrix(ed.W1.shape[0], ed.W1.shape[1], new Float64Array(ed.W1.data));
               }
-              if (ed.b2) {
-                expert.b2 = new Matrix(ed.b2.shape[0], ed.b2.shape[1], new Float64Array(ed.b2.data));
+              if (ed.b1 && expert.up) {
+                expert.up.biases = new Matrix(ed.b1.shape[0], ed.b1.shape[1], new Float64Array(ed.b1.data));
               }
-              // Legacy: W3 from SwiGLU experts (ignored for new ExpertFFN)
-              if (ed.W3 && expert.W3) {
-                expert.W3 = new Matrix(ed.W3.shape[0], ed.W3.shape[1], new Float64Array(ed.W3.data));
+              if (ed.W2 && expert.down) {
+                expert.down.weights = new Matrix(ed.W2.shape[0], ed.W2.shape[1], new Float64Array(ed.W2.data));
+              }
+              if (ed.b2 && expert.down) {
+                expert.down.biases = new Matrix(ed.b2.shape[0], ed.b2.shape[1], new Float64Array(ed.b2.data));
               }
             }
           }
@@ -702,28 +716,29 @@ export class Network {
           info.routerBiases = Array.from(layer.routerB.data);
           info.routerBiasShape = [layer.routerB.rows, layer.routerB.cols];
         }
-        // Serialize expert networks (Dense FFNs with W1, b1, W2, b2)
+        // Serialize expert networks (Dense FFNs with up/down layers)
         if (layer.experts) {
           info.experts = layer.experts.map(expert => ({
-            W1: {
-              data: Array.from(expert.W1.data),
-              shape: [expert.W1.rows, expert.W1.cols],
+            up: {
+              weights: {
+                data: Array.from(expert.up.weights.data),
+                shape: [expert.up.weights.rows, expert.up.weights.cols],
+              },
+              biases: {
+                data: Array.from(expert.up.biases.data),
+                shape: [expert.up.biases.rows, expert.up.biases.cols],
+              },
             },
-            b1: {
-              data: Array.from(expert.b1.data),
-              shape: [expert.b1.rows, expert.b1.cols],
+            down: {
+              weights: {
+                data: Array.from(expert.down.weights.data),
+                shape: [expert.down.weights.rows, expert.down.weights.cols],
+              },
+              biases: {
+                data: Array.from(expert.down.biases.data),
+                shape: [expert.down.biases.rows, expert.down.biases.cols],
+              },
             },
-            W2: {
-              data: Array.from(expert.W2.data),
-              shape: [expert.W2.rows, expert.W2.cols],
-            },
-            b2: {
-              data: Array.from(expert.b2.data),
-              shape: [expert.b2.rows, expert.b2.cols],
-            },
-            inputSize: expert.inputSize,
-            dHidden: expert.dHidden,
-            outputSize: expert.outputSize,
           }));
         }
       }

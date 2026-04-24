@@ -109,6 +109,23 @@ export function applyRoPEBackward(dOutput, freqCos, freqSin, offset = 0) {
  * @param {object} freqs - { cos, sin } from precomputeFreqs
  * @returns {{ Q_rot: Matrix, K_rot: Matrix }} Rotated Q and K
  */
+/**
+ * Alias for precomputeFreqs — used by gqa-attention.js
+ */
+export const precomputeRoPE = precomputeFreqs;
+
+/**
+ * Apply RoPE to a sequence given precomputed freqs object.
+ * Wrapper for applyRoPE that unpacks {cos, sin} from freqs.
+ * @param {Matrix} x - Input vectors (seqLen × dim)
+ * @param {{ cos: Matrix, sin: Matrix }} freqs - Precomputed frequencies
+ * @param {number} offset - Position offset
+ * @returns {Matrix} Rotated vectors
+ */
+export function applyRoPEToSequence(x, freqs, offset = 0) {
+  return applyRoPE(x, freqs.cos, freqs.sin, offset);
+}
+
 export function ropeAttention(Q, K, freqs) {
   const Q_rot = applyRoPE(Q, freqs.cos, freqs.sin);
   const K_rot = applyRoPE(K, freqs.cos, freqs.sin);

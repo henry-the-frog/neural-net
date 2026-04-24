@@ -117,12 +117,19 @@ export class RewardModel {
       const diff = rChosen - rRejected;
       const grad = -1 / (1 + Math.exp(diff)); // gradient of -log σ(diff) w.r.t. diff
       
+      // Bias gradient for b2: d/db2 = grad * (1 - 1) = grad * 0? No — 
+      // d(rChosen)/db2 = 1, d(rRejected)/db2 = 1, so d(diff)/db2 = 0.
+      // b2 cancels in the difference, so db2 gradient is zero. This is correct.
+      
       // Gradient flows through both chosen (+) and rejected (-)
       for (let j = 0; j < this.hiddenDim; j++) {
         const dReward_w = chosenHidden[j] > 0 ? 1 : 0;
         const dReward_l = rejectedHidden[j] > 0 ? 1 : 0;
         
         this.dW2.set(j, 0, this.dW2.get(j, 0) + grad * (chosenHidden[j] - rejectedHidden[j]));
+        
+        // Bias gradients for b1: d/db1_j = grad * W2_j * (relu'(chosen) - relu'(rejected))
+        this.db1[j] += grad * this.W2.get(j, 0) * (dReward_w - dReward_l);
         
         for (let i = 0; i < this.inputDim; i++) {
           const dChosen = grad * this.W2.get(j, 0) * dReward_w * chosenInput[i];
@@ -136,10 +143,12 @@ export class RewardModel {
     const scale = 1 / pairs.length;
     for (let i = 0; i < this.dW1.data.length; i++) this.dW1.data[i] *= scale;
     for (let i = 0; i < this.dW2.data.length; i++) this.dW2.data[i] *= scale;
+    for (let i = 0; i < this.db1.length; i++) this.db1[i] *= scale;
     
     // Update
     for (let i = 0; i < this.W1.data.length; i++) this.W1.data[i] -= lr * this.dW1.data[i];
     for (let i = 0; i < this.W2.data.length; i++) this.W2.data[i] -= lr * this.dW2.data[i];
+    for (let i = 0; i < this.b1.length; i++) this.b1[i] -= lr * this.db1[i];
     
     return { loss, accuracy };
   }

@@ -10,7 +10,7 @@ export const mse = {
     return diff.mul(diff).sum() / (2 * predicted.rows);
   },
   gradient(predicted, target) {
-    return predicted.sub(target);
+    return predicted.sub(target).mul(1.0 / predicted.rows);
   }
 };
 

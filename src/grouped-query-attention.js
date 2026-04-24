@@ -105,10 +105,7 @@ export class GroupedQueryAttention {
         const Kh = extractCols(K, kvOffset, hd); // Shared KV head
         const Vh = extractCols(V, kvOffset, hd); // Shared KV head
         
-        const context = flashAttention(Qh, Kh, Vh, {
-          blockSize: this.blockSize,
-          causal: this.causal,
-        });
+        const context = flashAttention(Qh, Kh, Vh, this.blockSize, this.causal);
         headOutputs.push(context);
       }
       this._allHeadOutputs.push(headOutputs);
