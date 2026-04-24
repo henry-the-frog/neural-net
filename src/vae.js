@@ -45,6 +45,13 @@ export class VAE {
     this.bd1 = new Float64Array(hiddenSize);
     this.Wd2 = Matrix.random(hiddenSize, inputSize).map(v => v * Math.sqrt(2.0 / hiddenSize));
     this.bd2 = new Float64Array(inputSize);
+    
+    // Accessors for test compatibility (transposed view: test expects W as outDim × inDim)
+    this.encHidden = { get W() { return { rows: hiddenSize, cols: inputSize }; }, b: this.be1 };
+    this.encMu = { get W() { return { rows: latentSize, cols: hiddenSize }; }, b: this.bmu };
+    this.encLogVar = { get W() { return { rows: latentSize, cols: hiddenSize }; }, b: this.blogvar };
+    this.decHidden = { get W() { return { rows: hiddenSize, cols: latentSize }; }, b: this.bd1 };
+    this.decOutput = { get W() { return { rows: inputSize, cols: hiddenSize }; }, b: this.bd2 };
   }
 
   /**
@@ -175,7 +182,9 @@ export class VAE {
       let totalLoss = 0, totalRecon = 0, totalKL = 0;
       
       for (const sample of data) {
-        const inp = Array.isArray(sample) ? sample : Array.from(sample);
+        const inp = Array.isArray(sample) ? sample
+          : (sample && sample.data) ? Array.from(sample.data)
+          : Array.from(sample);
         
         // Forward
         const { mu, logVar, hidden } = this.encode(inp);

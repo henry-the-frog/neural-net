@@ -139,6 +139,8 @@ export class MixtureOfExperts {
     // Save for backward
     this._input = x;
     this._tokenRouting = [];
+    this._expertHiddens = []; // per-sample per-expert hidden states
+    this._expertInputs = []; // per-sample input matrices
     this.topKIndices = [];
     
     for (let b = 0; b < batchSize; b++) {
@@ -162,8 +164,10 @@ export class MixtureOfExperts {
       // Get sample input
       const sampleInput = new Matrix(1, this.inputDim);
       for (let j = 0; j < this.inputDim; j++) sampleInput.set(0, j, x.get(b, j));
+      this._expertInputs.push(sampleInput);
       
       // Compute weighted expert outputs
+      const hiddens = {};
       for (let k = 0; k < this.topK; k++) {
         const expertIdx = indices[k];
         const weight = weights[k];
@@ -171,11 +175,13 @@ export class MixtureOfExperts {
         
         const hidden = expert.up.forward(sampleInput);
         const expertOut = expert.down.forward(hidden);
+        hiddens[expertIdx] = { hidden: new Matrix(hidden.rows, hidden.cols, new Float64Array(hidden.data)), sampleInput };
         
         for (let j = 0; j < this.outputDim; j++) {
           output.set(b, j, output.get(b, j) + weight * expertOut.get(0, j));
         }
       }
+      this._expertHiddens.push(hiddens);
     }
     
     return output;
@@ -190,19 +196,24 @@ export class MixtureOfExperts {
     const batchSize = dOutput.rows;
     const dInput = new Matrix(batchSize, this.inputDim);
     
+    // Zero-initialize gradient accumulators for all experts
+    const gradAccum = this.experts.map(expert => ({
+      up_dW: Matrix.zeros(expert.up.weights.rows, expert.up.weights.cols),
+      up_dB: Matrix.zeros(1, expert.up.weights.cols),
+      down_dW: Matrix.zeros(expert.down.weights.rows, expert.down.weights.cols),
+      down_dB: Matrix.zeros(1, expert.down.weights.cols),
+    }));
+    
     for (let b = 0; b < batchSize; b++) {
       const { indices, weights } = this._tokenRouting[b];
-      
-      // Get sample input for re-forward through experts
-      const sampleInput = new Matrix(1, this.inputDim);
-      for (let j = 0; j < this.inputDim; j++) sampleInput.set(0, j, this._input.get(b, j));
+      const sampleInput = this._expertInputs[b];
       
       for (let k = 0; k < this.topK; k++) {
         const expertIdx = indices[k];
         const weight = weights[k];
         const expert = this.experts[expertIdx];
         
-        // Re-forward to set internal state
+        // Re-forward to set correct internal state for this sample
         const hidden = expert.up.forward(sampleInput);
         expert.down.forward(hidden);
         
@@ -216,6 +227,13 @@ export class MixtureOfExperts {
         const dHidden = expert.down.backward(dToken);
         const dExpertInput = expert.up.backward(dHidden);
         
+        // Accumulate weight gradients
+        const acc = gradAccum[expertIdx];
+        for (let i = 0; i < acc.up_dW.data.length; i++) acc.up_dW.data[i] += expert.up.dWeights.data[i];
+        for (let i = 0; i < acc.up_dB.data.length; i++) acc.up_dB.data[i] += expert.up.dBiases.data[i];
+        for (let i = 0; i < acc.down_dW.data.length; i++) acc.down_dW.data[i] += expert.down.dWeights.data[i];
+        for (let i = 0; i < acc.down_dB.data.length; i++) acc.down_dB.data[i] += expert.down.dBiases.data[i];
+        
         // Accumulate input gradients
         if (dExpertInput) {
           for (let j = 0; j < this.inputDim; j++) {
@@ -223,6 +241,18 @@ export class MixtureOfExperts {
           }
         }
       }
+    }
+    
+    // Set accumulated gradients back on expert layers
+    for (let e = 0; e < this.numExperts; e++) {
+      const expert = this.experts[e];
+      const acc = gradAccum[e];
+      expert.up.dWeights = acc.up_dW;
+      expert.up.dBiases = acc.up_dB;
+      expert.up.input = new Matrix(batchSize, this.inputDim); // dummy for update's batchSize
+      expert.down.dWeights = acc.down_dW;
+      expert.down.dBiases = acc.down_dB;
+      expert.down.input = new Matrix(batchSize, this.hiddenDim);
     }
     
     return dInput;
