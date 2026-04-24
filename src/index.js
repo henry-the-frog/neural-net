@@ -106,6 +106,7 @@ export { addNoise, randomFlipH, randomCrop, mixup, cutout, compose, randomBright
 // Training
 export { TrainingLogger, trainWithLogging } from './training-logger.js';
 export { EarlyStopping, trainWithEarlyStopping } from './early-stopping.js';
+export { ModelCheckpoint, TrainingState, ReduceLROnPlateau } from './model-checkpoint.js';
 export { crossValidate, kFoldSplit } from './cross-validation.js';
 export { autoML } from './automl.js';
 

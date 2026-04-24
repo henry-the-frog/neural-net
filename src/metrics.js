@@ -44,7 +44,7 @@ export function precisionRecallF1(predictions, targets, positiveClass = 1) {
 }
 
 // Per-class precision from confusion matrix
-export function precision(cm) {
+export function cmPrecision(cm) {
   const n = cm.length;
   const result = new Array(n);
   for (let c = 0; c < n; c++) {
@@ -55,9 +55,11 @@ export function precision(cm) {
   }
   return result;
 }
+// Legacy aliases
+export const precision = cmPrecision;
 
 // Per-class recall from confusion matrix
-export function recall(cm) {
+export function cmRecall(cm) {
   const n = cm.length;
   const result = new Array(n);
   for (let c = 0; c < n; c++) {
@@ -68,37 +70,16 @@ export function recall(cm) {
   }
   return result;
 }
+export const recall = cmRecall;
 
 // Per-class F1 from confusion matrix
 export function f1Score(cm) {
-  const p = precision(cm);
-  const r = recall(cm);
+  const p = cmPrecision(cm);
+  const r = cmRecall(cm);
   return p.map((pi, i) => {
     const denom = pi + r[i];
     return denom > 0 ? 2 * pi * r[i] / denom : 0;
   });
-}
-
-// Classification report from predictions
-export function classificationReport(predictions, targets, numClasses) {
-  const cm = confusionMatrix(predictions, targets, numClasses);
-  const p = precision(cm);
-  const r = recall(cm);
-  const f1 = f1Score(cm);
-  const total = predictions.length;
-  let correct = 0;
-  for (let i = 0; i < total; i++) if (predictions[i] === targets[i]) correct++;
-  const acc = correct / total;
-  const perClass = [];
-  for (let c = 0; c < numClasses; c++) {
-    perClass.push({ precision: p[c], recall: r[c], f1: f1[c] });
-  }
-  const macro = {
-    precision: p.reduce((a, b) => a + b, 0) / numClasses,
-    recall: r.reduce((a, b) => a + b, 0) / numClasses,
-    f1: f1.reduce((a, b) => a + b, 0) / numClasses,
-  };
-  return { confusionMatrix: cm, perClass, accuracy: acc, macro };
 }
 
 // Pretty-print confusion matrix
