@@ -72,6 +72,7 @@ export class Dense {
 
   // Update weights with optimizer
   update(learningRate, momentum = 0, optimizer = 'sgd') {
+    if (!this.dWeights || !this.input) return; // No gradients computed yet
     const batchSize = this.input.rows;
     const gradW = this.dWeights.mul(1.0 / batchSize);
     const gradB = this.dBiases.mul(1.0 / batchSize);

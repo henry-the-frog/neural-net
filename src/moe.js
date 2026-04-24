@@ -1,13 +1,6 @@
 // moe.js — Mixture of Experts Layer (Shazeer et al., 2017)
 // Routes each token to top-k experts out of N total.
 // Scales model capacity without proportionally scaling compute.
-//
-// Architecture:
-//   Router: linear layer mapping input → expert scores
-//   Experts: N independent FFN layers
-//   Output: weighted sum of top-k expert outputs
-//
-// Load balancing: auxiliary loss encourages equal expert usage
 
 import { Matrix } from './matrix.js';
 import { Dense } from './layer.js';
@@ -19,8 +12,6 @@ import { Dense } from './layer.js';
  * @returns {{ indices: number[], weights: Float64Array }}
  */
 function topKRoute(scores, k) {
-  const n = scores.length;
-  // Find top-k indices
   const indexed = Array.from(scores).map((s, i) => ({ s, i }));
   indexed.sort((a, b) => b.s - a.s);
   const topK = indexed.slice(0, k);
@@ -37,80 +28,140 @@ function topKRoute(scores, k) {
   return { indices: topK.map(t => t.i), weights };
 }
 
+/**
+ * Full softmax over all scores.
+ */
+function softmax(scores) {
+  const max = Math.max(...scores);
+  const exps = scores.map(s => Math.exp(s - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return exps.map(e => e / sum);
+}
+
 export class MixtureOfExperts {
   /**
-   * @param {number} inputDim - Input/output dimension
+   * @param {number} inputDim - Input dimension
+   * @param {number} numExperts - Number of expert networks
    * @param {number} hiddenDim - Expert FFN hidden dimension
-   * @param {number} numExperts - Total number of experts
-   * @param {number} topK - Number of experts per token
+   * @param {number} outputDim - Output dimension
+   * @param {number} topK - Number of experts per token (default 2)
    * @param {number} loadBalanceCoeff - Load balancing loss coefficient
    */
-  constructor(inputDim, hiddenDim, numExperts = 8, topK = 2, loadBalanceCoeff = 0.01) {
+  constructor(inputDim, numExperts = 4, hiddenDim = 16, outputDim = null, topK = 2, loadBalanceCoeff = 0.01) {
     this.inputDim = inputDim;
-    this.hiddenDim = hiddenDim;
     this.numExperts = numExperts;
+    this.hiddenDim = hiddenDim;
+    this.outputDim = outputDim || inputDim;
     this.topK = topK;
     this.loadBalanceCoeff = loadBalanceCoeff;
     
-    // Router: maps input to expert scores
-    this.router = new Dense(inputDim, numExperts, 'linear');
+    // Gate/Router: maps input to expert scores (softmax over numExperts)
+    this.gate = new Dense(inputDim, numExperts, 'linear');
     
-    // Experts: N independent FFN layers (input → hidden → input)
+    // Experts: N independent FFN layers (input → hidden → output)
     this.experts = [];
     for (let i = 0; i < numExperts; i++) {
       this.experts.push({
         up: new Dense(inputDim, hiddenDim, 'relu'),
-        down: new Dense(hiddenDim, inputDim, 'linear'),
+        down: new Dense(hiddenDim, this.outputDim, 'linear'),
       });
     }
     
     // Tracking for load balancing
-    this._expertCounts = new Float64Array(numExperts);
-    this._totalTokens = 0;
-    this._routingInfo = null;
+    this.routingCounts = new Array(numExperts).fill(0);
+    this.totalRouted = 0;
+    this.topKIndices = []; // per-sample top-K indices
+    this.gateProbs = null; // (batch, numExperts) gate probabilities
+    
+    // Saved for backward
+    this._input = null;
+    this._tokenRouting = null;
+  }
+
+  /**
+   * Reset routing statistics.
+   */
+  resetRoutingStats() {
+    this.routingCounts = new Array(this.numExperts).fill(0);
+    this.totalRouted = 0;
+    this.topKIndices = [];
+  }
+
+  /**
+   * Get routing distribution (fraction of tokens per expert).
+   */
+  routingDistribution() {
+    if (this.totalRouted === 0) return new Array(this.numExperts).fill(0);
+    return this.routingCounts.map(c => c / this.totalRouted);
+  }
+
+  /**
+   * Compute load balance loss from current routing counts.
+   * Perfectly balanced → 0. Imbalanced → positive.
+   */
+  loadBalanceLoss() {
+    if (this.totalRouted === 0) return 0;
+    const n = this.routingCounts.length;
+    const expected = this.totalRouted / n;
+    let loss = 0;
+    for (let i = 0; i < n; i++) {
+      const diff = this.routingCounts[i] - expected;
+      loss += diff * diff;
+    }
+    return loss / (this.totalRouted * this.totalRouted);
   }
 
   /**
    * Forward pass: route each token through top-k experts.
-   * @param {Matrix} x - Input (seqLen × inputDim)
-   * @returns {{ output: Matrix, auxLoss: number }}
+   * @param {Matrix} x - Input (batchSize × inputDim)
+   * @returns {Matrix} output (batchSize × outputDim)
    */
   forward(x) {
-    const seqLen = x.rows;
-    const d = x.cols;
-    const output = new Matrix(seqLen, d);
+    const batchSize = x.rows;
+    const output = new Matrix(batchSize, this.outputDim);
     
-    // Compute router scores
-    const routerScores = this.router.forward(x); // seqLen × numExperts
+    // Compute gate scores
+    const gateScores = this.gate.forward(x); // batchSize × numExperts
     
-    // Save routing info for backward
-    this._routingInfo = {
-      input: x,
-      routerScores,
-      tokenRouting: [], // per-token: { indices, weights }
-    };
+    // Compute full softmax gate probabilities
+    this.gateProbs = new Matrix(batchSize, this.numExperts);
+    for (let b = 0; b < batchSize; b++) {
+      const scores = new Array(this.numExperts);
+      for (let e = 0; e < this.numExperts; e++) {
+        scores[e] = gateScores.get(b, e);
+      }
+      const probs = softmax(scores);
+      for (let e = 0; e < this.numExperts; e++) {
+        this.gateProbs.set(b, e, probs[e]);
+      }
+    }
     
-    // Reset expert counts
-    this._expertCounts.fill(0);
-    this._totalTokens = seqLen;
+    // Save for backward
+    this._input = x;
+    this._tokenRouting = [];
+    this.topKIndices = [];
     
-    for (let t = 0; t < seqLen; t++) {
-      // Get scores for this token
+    for (let b = 0; b < batchSize; b++) {
+      // Get scores for this sample
       const scores = new Float64Array(this.numExperts);
       for (let e = 0; e < this.numExperts; e++) {
-        scores[e] = routerScores.get(t, e);
+        scores[e] = gateScores.get(b, e);
       }
       
       // Route to top-k experts
       const { indices, weights } = topKRoute(scores, this.topK);
-      this._routingInfo.tokenRouting.push({ indices, weights });
+      this._tokenRouting.push({ indices, weights });
+      this.topKIndices.push(indices);
       
       // Track expert usage
-      for (const idx of indices) this._expertCounts[idx]++;
+      for (const idx of indices) {
+        this.routingCounts[idx]++;
+      }
+      this.totalRouted += this.topK;
       
-      // Get token input
-      const tokenInput = new Matrix(1, d);
-      for (let j = 0; j < d; j++) tokenInput.set(0, j, x.get(t, j));
+      // Get sample input
+      const sampleInput = new Matrix(1, this.inputDim);
+      for (let j = 0; j < this.inputDim; j++) sampleInput.set(0, j, x.get(b, j));
       
       // Compute weighted expert outputs
       for (let k = 0; k < this.topK; k++) {
@@ -118,81 +169,67 @@ export class MixtureOfExperts {
         const weight = weights[k];
         const expert = this.experts[expertIdx];
         
-        const hidden = expert.up.forward(tokenInput);
+        const hidden = expert.up.forward(sampleInput);
         const expertOut = expert.down.forward(hidden);
         
-        for (let j = 0; j < d; j++) {
-          output.set(t, j, output.get(t, j) + weight * expertOut.get(0, j));
+        for (let j = 0; j < this.outputDim; j++) {
+          output.set(b, j, output.get(b, j) + weight * expertOut.get(0, j));
         }
       }
     }
     
-    // Compute load balancing auxiliary loss
-    const auxLoss = this._computeLoadBalanceLoss();
-    
-    return { output, auxLoss };
+    return output;
   }
 
   /**
-   * Compute auxiliary load balancing loss.
-   * Encourages equal expert usage across tokens.
-   * Loss = coeff * N * sum(f_i * P_i) where f_i = fraction of tokens routed to expert i
-   * and P_i = average router probability for expert i.
-   */
-  _computeLoadBalanceLoss() {
-    if (this._totalTokens === 0) return 0;
-    
-    let loss = 0;
-    for (let e = 0; e < this.numExperts; e++) {
-      const f = this._expertCounts[e] / this._totalTokens;
-      // P is the average softmax probability for expert e across all tokens
-      let pSum = 0;
-      for (let t = 0; t < this._totalTokens; t++) {
-        pSum += Math.exp(this._routingInfo.routerScores.get(t, e));
-      }
-      const p = pSum / this._totalTokens;
-      loss += f * p;
-    }
-    
-    return this.loadBalanceCoeff * this.numExperts * loss;
-  }
-
-  /**
-   * Backward pass (simplified: only updates expert FFNs, not router).
-   * Full backward with router gradients requires more complex implementation.
+   * Backward pass: propagate gradient through selected experts.
+   * @param {Matrix} dOutput - (batchSize × outputDim)
+   * @returns {Matrix} dInput - (batchSize × inputDim)
    */
   backward(dOutput) {
-    // For each token, propagate gradient through the selected experts
-    const seqLen = dOutput.rows;
-    const d = dOutput.cols;
+    const batchSize = dOutput.rows;
+    const dInput = new Matrix(batchSize, this.inputDim);
     
-    for (let t = 0; t < seqLen; t++) {
-      const { indices, weights } = this._routingInfo.tokenRouting[t];
-      const dToken = new Matrix(1, d);
-      for (let j = 0; j < d; j++) dToken.set(0, j, dOutput.get(t, j));
+    for (let b = 0; b < batchSize; b++) {
+      const { indices, weights } = this._tokenRouting[b];
+      
+      // Get sample input for re-forward through experts
+      const sampleInput = new Matrix(1, this.inputDim);
+      for (let j = 0; j < this.inputDim; j++) sampleInput.set(0, j, this._input.get(b, j));
       
       for (let k = 0; k < this.topK; k++) {
         const expertIdx = indices[k];
         const weight = weights[k];
         const expert = this.experts[expertIdx];
         
+        // Re-forward to set internal state
+        const hidden = expert.up.forward(sampleInput);
+        expert.down.forward(hidden);
+        
         // Scale gradient by routing weight
-        const scaledDToken = new Matrix(1, d);
-        for (let j = 0; j < d; j++) scaledDToken.set(0, j, dToken.get(0, j) * weight);
+        const dToken = new Matrix(1, this.outputDim);
+        for (let j = 0; j < this.outputDim; j++) {
+          dToken.set(0, j, dOutput.get(b, j) * weight);
+        }
         
         // Backward through expert
-        const dHidden = expert.down.backward(scaledDToken);
-        expert.up.backward(dHidden);
+        const dHidden = expert.down.backward(dToken);
+        const dExpertInput = expert.up.backward(dHidden);
+        
+        // Accumulate input gradients
+        if (dExpertInput) {
+          for (let j = 0; j < this.inputDim; j++) {
+            dInput.set(b, j, dInput.get(b, j) + dExpertInput.get(0, j));
+          }
+        }
       }
     }
     
-    // Router backward (gradient of scores w.r.t. routing decisions)
-    // Simplified: we don't compute router gradients in this version
-    return null;
+    return dInput;
   }
 
   update(lr) {
-    this.router.update(lr);
+    this.gate.update(lr);
     for (const expert of this.experts) {
       expert.up.update(lr);
       expert.down.update(lr);
@@ -200,23 +237,48 @@ export class MixtureOfExperts {
   }
 
   paramCount() {
-    let count = this.router.paramCount();
+    let count = this.gate.paramCount();
     for (const expert of this.experts) {
       count += expert.up.paramCount() + expert.down.paramCount();
     }
     return count;
   }
 
+  toJSON() {
+    return {
+      type: 'MixtureOfExperts',
+      inputDim: this.inputDim,
+      numExperts: this.numExperts,
+      hiddenDim: this.hiddenDim,
+      outputDim: this.outputDim,
+      topK: this.topK,
+      loadBalanceCoeff: this.loadBalanceCoeff,
+      gate: this.gate.toJSON(),
+      experts: this.experts.map(e => ({ up: e.up.toJSON(), down: e.down.toJSON() })),
+    };
+  }
+
+  static fromJSON(json) {
+    const moe = new MixtureOfExperts(
+      json.inputDim, json.numExperts, json.hiddenDim, json.outputDim, json.topK, json.loadBalanceCoeff
+    );
+    moe.gate = Dense.fromJSON(json.gate);
+    moe.experts = json.experts.map(e => ({
+      up: Dense.fromJSON(e.up),
+      down: Dense.fromJSON(e.down),
+    }));
+    return moe;
+  }
+
   /**
    * Get expert utilization statistics.
    */
   getExpertStats() {
-    const total = this._totalTokens || 1;
-    return Array.from(this._expertCounts).map((count, i) => ({
+    const total = this.totalRouted || 1;
+    return this.routingCounts.map((count, i) => ({
       expert: i,
       tokens: count,
       fraction: count / total,
-      balanced: Math.abs(count / total - 1 / this.numExperts) < 0.1,
     }));
   }
 }
