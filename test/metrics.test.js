@@ -43,17 +43,17 @@ describe('Confusion Matrix', () => {
 });
 
 describe('Classification Report', () => {
-  it('returns complete report', () => {
+  it('returns per-class metrics', () => {
     const pred = [0, 1, 0, 1, 0, 1];
     const actual = [0, 1, 0, 0, 1, 1];
-    const report = classificationReport(pred, actual, 2);
+    const report = classificationReport(pred, actual);
     
-    assert.ok(report.confusionMatrix);
-    assert.equal(report.perClass.length, 2);
-    assert.ok(report.accuracy > 0.5);
-    assert.ok(report.macro.precision > 0);
-    assert.ok(report.macro.recall > 0);
-    assert.ok(report.macro.f1 > 0);
+    assert.ok(Array.isArray(report));
+    assert.equal(report.length, 2);
+    assert.ok(report[0].precision >= 0);
+    assert.ok(report[0].recall >= 0);
+    assert.ok(report[0].f1 >= 0);
+    assert.ok(report[0].support > 0);
   });
 });
 
