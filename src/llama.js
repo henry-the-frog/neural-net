@@ -31,12 +31,12 @@
 // This file provides a convenient single-import point.
 
 // Attention
-export { FlashAttention, flashAttention, standardAttention } from './flash-attention.js';
+export { flashAttention, standardAttention } from './flash-attention.js';
 export { MultiHeadFlashAttention } from './multi-head-flash-attention.js';
 export { GroupedQueryAttention } from './grouped-query-attention.js';
 
 // Position
-export { precomputeFreqs, applyRoPE, applyInverseRoPE } from './rope.js';
+export { precomputeFreqs, applyRoPE, applyRoPEBackward as applyInverseRoPE } from './rope.js';
 
 // Normalization & FFN
 export { RMSNorm, SwiGLUFFN, ModernDecoderBlock } from './modern-decoder.js';
