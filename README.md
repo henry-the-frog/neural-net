@@ -1,6 +1,6 @@
 # neural-net
 
-A comprehensive deep learning library built from scratch in JavaScript. No dependencies. **168 source modules, 150 test files, ~26,000 lines of code.** Spans Hopfield networks (1982) to KAN (2024) — 42 years of neural network research, implemented and tested.
+A comprehensive deep learning library built from scratch in JavaScript. No dependencies. **168 source modules, 192 test files, 2,300+ tests, ~27,000 lines of code.** Spans Hopfield networks (1982) to KAN (2024) — 42 years of neural network research, implemented and tested.
 
 ## Quick Start
 
