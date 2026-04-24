@@ -225,11 +225,14 @@ describe('Serialization Round-trip: MixtureOfExperts', () => {
     net.layers.push(moe);
 
     const input = Matrix.random(1, 4);
-    const out1 = net.forward(input);
+    const result1 = net.forward(input);
+    // MoE.forward returns { output, auxLoss }, not a raw Matrix
+    const out1 = result1.output || result1;
 
     const json = net.toJSON();
     const net2 = Network.fromJSON(json);
-    const out2 = net2.forward(input);
+    const result2 = net2.forward(input);
+    const out2 = result2.output || result2;
 
     assertMatrixClose(out1, out2, 1e-10, 'MoE round-trip');
   });

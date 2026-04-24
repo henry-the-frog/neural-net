@@ -536,9 +536,12 @@ export class Network {
         }
         case 'MixtureOfExperts': {
           if (!MixtureOfExperts) throw new Error('MixtureOfExperts not available for deserialization');
-          layer = new MixtureOfExperts(d.dModel || d.inputSize, d.numExperts, d.dHidden || 16, d.outputSize || d.dModel || d.inputSize, d.topK);
-          // Restore router weights
-          if (d.routerWeightShape && layer.routerW) {
+          layer = new MixtureOfExperts(d.dModel || d.inputSize, d.dHidden || 16, d.numExperts, d.topK);
+          // Restore router weights (router is a Dense layer)
+          if (d.routerWeightShape && layer.router) {
+            layer.router.weights = new Matrix(d.routerWeightShape[0], d.routerWeightShape[1], new Float64Array(d.routerWeights));
+            layer.router.biases = new Matrix(d.routerBiasShape[0], d.routerBiasShape[1], new Float64Array(d.routerBiases));
+          } else if (d.routerWeightShape && layer.routerW) {
             layer.routerW = new Matrix(d.routerWeightShape[0], d.routerWeightShape[1], new Float64Array(d.routerWeights));
             layer.routerB = new Matrix(d.routerBiasShape[0], d.routerBiasShape[1], new Float64Array(d.routerBiases));
           }
@@ -703,14 +706,19 @@ export class Network {
         // Serialize residual weights (nested array [inputSize][outputSize])
         info.residualWeights = layer.residualWeights.map(row => Array.from(row));
       } else if (layer.constructor.name === 'MixtureOfExperts') {
-        info.dModel = layer.inputSize;
-        info.inputSize = layer.inputSize;
+        info.dModel = layer.inputDim || layer.inputSize;
+        info.inputSize = layer.inputDim || layer.inputSize;
         info.numExperts = layer.numExperts || layer.experts?.length;
         info.topK = layer.topK;
-        info.dHidden = layer.dHidden || layer.experts?.[0]?.dHidden;
-        info.outputSize = layer.outputSize;
-        // Serialize router weights
-        if (layer.routerW) {
+        info.dHidden = layer.hiddenDim || layer.dHidden || layer.experts?.[0]?.up?.weights?.cols;
+        info.outputSize = layer.inputDim || layer.outputSize;
+        // Serialize router weights (router is a Dense layer)
+        if (layer.router) {
+          info.routerWeights = Array.from(layer.router.weights.data);
+          info.routerWeightShape = [layer.router.weights.rows, layer.router.weights.cols];
+          info.routerBiases = Array.from(layer.router.biases.data);
+          info.routerBiasShape = [layer.router.biases.rows, layer.router.biases.cols];
+        } else if (layer.routerW) {
           info.routerWeights = Array.from(layer.routerW.data);
           info.routerWeightShape = [layer.routerW.rows, layer.routerW.cols];
           info.routerBiases = Array.from(layer.routerB.data);
