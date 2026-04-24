@@ -97,6 +97,9 @@ export { PositionalEncoding, TransformerEncoderBlock } from './transformer.js';
 
 // Data & Preprocessing
 export { Datasets } from './datasets.js';
+export { DataLoader, trainValTestSplit, stratifiedSplit } from './data-loader.js';
+export { kFoldSplit as dataLoaderKFold } from './data-loader.js';
+export { shuffle, normalize, applyNormalization, minMaxScale, createBatches } from './data.js';
 export { StandardScaler, MinMaxScaler, oneHotEncode, trainTestSplit } from './preprocessing.js';
 export { addNoise, randomFlipH, randomCrop, mixup, cutout, compose, randomBrightnessContrast } from './augmentation.js';
 
