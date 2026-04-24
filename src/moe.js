@@ -135,6 +135,8 @@ export class MixtureOfExperts {
         this.gateProbs.set(b, e, probs[e]);
       }
     }
+    // Also store on gate object for test compatibility
+    this.gate.probs = this.gateProbs;
     
     // Save for backward
     this._input = x;
@@ -204,18 +206,51 @@ export class MixtureOfExperts {
       down_dB: Matrix.zeros(1, expert.down.weights.cols),
     }));
     
+    // Gate gradient: compute proper softmax Jacobian
+    const dGateScores = new Matrix(batchSize, this.numExperts);
+    
     for (let b = 0; b < batchSize; b++) {
       const { indices, weights } = this._tokenRouting[b];
       const sampleInput = this._expertInputs[b];
       
+      // Compute expert outputs for this sample
+      const expertOuts = {};
+      for (let k = 0; k < this.topK; k++) {
+        const expertIdx = indices[k];
+        const expert = this.experts[expertIdx];
+        const hidden = expert.up.forward(sampleInput);
+        const expertOut = expert.down.forward(hidden);
+        expertOuts[expertIdx] = new Float64Array(expertOut.data);
+      }
+      
+      // For each selected expert pair (k, e), compute dL/ds_e contribution
+      // dL/ds_e = Σ_j dL/dy_j * Σ_k expertOut_k_j * w_k * (δ_{ke} - w_e)
+      for (let ei = 0; ei < this.topK; ei++) {
+        const e = indices[ei];
+        const w_e = weights[ei];
+        
+        // Σ_j dL/dy_j * Σ_k expertOut_k_j * w_k * (δ_{ke} - w_e)
+        let dScore = 0;
+        for (let ki = 0; ki < this.topK; ki++) {
+          const k = indices[ki];
+          const w_k = weights[ki];
+          const jacobian = w_k * ((k === e ? 1 : 0) - w_e);
+          for (let j = 0; j < this.outputDim; j++) {
+            dScore += dOutput.get(b, j) * expertOuts[k][j] * jacobian;
+          }
+        }
+        dGateScores.set(b, e, dScore);
+      }
+      
+      // Now backward through experts with proper state
       for (let k = 0; k < this.topK; k++) {
         const expertIdx = indices[k];
         const weight = weights[k];
         const expert = this.experts[expertIdx];
         
         // Re-forward to set correct internal state for this sample
-        const hidden = expert.up.forward(sampleInput);
-        expert.down.forward(hidden);
+        expert.up.forward(sampleInput);
+        expert.down.forward(expert.up.a);
         
         // Scale gradient by routing weight
         const dToken = new Matrix(1, this.outputDim);
@@ -249,10 +284,21 @@ export class MixtureOfExperts {
       const acc = gradAccum[e];
       expert.up.dWeights = acc.up_dW;
       expert.up.dBiases = acc.up_dB;
-      expert.up.input = new Matrix(batchSize, this.inputDim); // dummy for update's batchSize
+      expert.up.input = new Matrix(batchSize, this.inputDim);
       expert.down.dWeights = acc.down_dW;
       expert.down.dBiases = acc.down_dB;
       expert.down.input = new Matrix(batchSize, this.hiddenDim);
+    }
+    
+    // Backward through gate
+    this.gate.forward(this._input); // Set gate internal state
+    const dGateInput = this.gate.backward(dGateScores);
+    
+    // Add gate input gradient to total
+    if (dGateInput) {
+      for (let i = 0; i < dInput.data.length; i++) {
+        dInput.data[i] += dGateInput.data[i];
+      }
     }
     
     return dInput;
