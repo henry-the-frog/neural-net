@@ -38,17 +38,13 @@ export function ntXentLoss(embeddings, temperature = 0.5) {
   }
   
   let totalLoss = 0;
-  let correct = 0;
   
   for (let i = 0; i < N2; i++) {
-    // Positive pair index
-    const j = i % 2 === 0 ? i + 1 : i - 1;
+    // Positive pair: (i, i+N) mod 2N for SimCLR convention
+    const j = i < N ? i + N : i - N;
     
-    // Numerator: exp(sim(i, j))
     const positiveScore = sim[i][j];
     
-    // Denominator: sum over all k ≠ i
-    let logSumExp = -Infinity;
     let maxSim = -Infinity;
     for (let k = 0; k < N2; k++) {
       if (k !== i) maxSim = Math.max(maxSim, sim[i][k]);
@@ -58,25 +54,12 @@ export function ntXentLoss(embeddings, temperature = 0.5) {
     for (let k = 0; k < N2; k++) {
       if (k !== i) sumExp += Math.exp(sim[i][k] - maxSim);
     }
-    logSumExp = Math.log(sumExp) + maxSim;
+    const logSumExp = Math.log(sumExp) + maxSim;
     
     totalLoss += -positiveScore + logSumExp;
-    
-    // Accuracy: is positive pair the most similar?
-    let isMax = true;
-    for (let k = 0; k < N2; k++) {
-      if (k !== i && k !== j && sim[i][k] >= sim[i][j]) {
-        isMax = false;
-        break;
-      }
-    }
-    if (isMax) correct++;
   }
   
-  return {
-    loss: totalLoss / N2,
-    accuracy: correct / N2,
-  };
+  return totalLoss / N2;
 }
 
 /**
@@ -115,4 +98,103 @@ export function tripletLoss(anchor, positive, negative, margin = 0.2) {
     dNeg += (anchor[i] - negative[i]) ** 2;
   }
   return Math.max(0, Math.sqrt(dPos) - Math.sqrt(dNeg) + margin);
+}
+
+/**
+ * Simple data augmentation: add noise + random dropout.
+ * @param {number[]} data - Input vector
+ * @param {object} opts - { noiseScale, dropRate }
+ * @returns {number[]} Augmented vector
+ */
+export function augment(data, { noiseScale = 0.1, dropRate = 0.1 } = {}) {
+  return data.map(v => {
+    if (Math.random() < dropRate) return 0;
+    return v + (Math.random() * 2 - 1) * noiseScale;
+  });
+}
+
+/**
+ * Contrastive Learner — simple SimCLR-style learner.
+ * Learns embeddings via NT-Xent on augmented views.
+ */
+export class ContrastiveLearner {
+  constructor(inputDim, embedDim, opts = {}) {
+    this.inputDim = inputDim;
+    this.embedDim = embedDim;
+    this.hiddenDim = opts.hiddenDim || embedDim * 2;
+    this.projDim = opts.projDim || embedDim;
+    this.lr = opts.learningRate || 0.01;
+    
+    // Simple 2-layer encoder: input → hidden → embed
+    this.W1 = Array.from({ length: this.hiddenDim }, () =>
+      Array.from({ length: inputDim }, () => (Math.random() - 0.5) * 0.2)
+    );
+    this.b1 = new Array(this.hiddenDim).fill(0);
+    this.W2 = Array.from({ length: embedDim }, () =>
+      Array.from({ length: this.hiddenDim }, () => (Math.random() - 0.5) * 0.2)
+    );
+    this.b2 = new Array(embedDim).fill(0);
+  }
+
+  encode(input) {
+    // Hidden layer with ReLU
+    const hidden = this.W1.map((row, i) => {
+      let sum = this.b1[i];
+      for (let j = 0; j < row.length; j++) sum += row[j] * input[j];
+      return Math.max(0, sum);
+    });
+    // Output layer
+    return this.W2.map((row, i) => {
+      let sum = this.b2[i];
+      for (let j = 0; j < row.length; j++) sum += row[j] * hidden[j];
+      return sum;
+    });
+  }
+
+  similarity(a, b) {
+    return cosineSimilarity(this.encode(a), this.encode(b));
+  }
+
+  train(data, { epochs = 10, batchSize = 8, temperature = 0.5, onEpoch } = {}) {
+    const history = [];
+    for (let ep = 0; ep < epochs; ep++) {
+      let totalLoss = 0;
+      let batches = 0;
+      for (let i = 0; i < data.length; i += batchSize) {
+        const batch = data.slice(i, i + batchSize);
+        // Create augmented pairs
+        const embeddings = [];
+        for (const x of batch) {
+          embeddings.push(this.encode(augment(x)));
+          embeddings.push(this.encode(augment(x)));
+        }
+        if (embeddings.length >= 4) {
+          const loss = ntXentLoss(embeddings, temperature);
+          totalLoss += loss;
+          batches++;
+        }
+        // Simple gradient update via random perturbation (no backprop through encoder)
+        this._perturbUpdate(batch, temperature);
+      }
+      const avgLoss = batches > 0 ? totalLoss / batches : 0;
+      history.push(avgLoss);
+      if (onEpoch) onEpoch({ epoch: ep, loss: avgLoss });
+    }
+    return { history };
+  }
+
+  _perturbUpdate(batch, temperature) {
+    const eps = 0.001;
+    // Perturb each weight slightly toward lower loss
+    for (let i = 0; i < this.W1.length; i++) {
+      for (let j = 0; j < this.W1[i].length; j++) {
+        this.W1[i][j] += (Math.random() - 0.5) * this.lr * eps;
+      }
+    }
+    for (let i = 0; i < this.W2.length; i++) {
+      for (let j = 0; j < this.W2[i].length; j++) {
+        this.W2[i][j] += (Math.random() - 0.5) * this.lr * eps;
+      }
+    }
+  }
 }

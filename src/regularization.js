@@ -133,3 +133,106 @@ export function l2Penalty(weights, lambda = 0.01) {
 export function elasticNetPenalty(weights, lambda = 0.01, ratio = 0.5) {
   return ratio * l1Penalty(weights, lambda) + (1 - ratio) * l2Penalty(weights, lambda);
 }
+
+// === Matrix-based regularization API (returns { penalty, gradient }) ===
+
+/**
+ * L1 regularization on Matrix weights.
+ * @param {Matrix} weights
+ * @param {number} lambda
+ * @returns {{ penalty: number, gradient: Matrix }}
+ */
+export function l1Regularization(weights, lambda = 0.01) {
+  let penalty = 0;
+  const gradient = new Matrix(weights.rows, weights.cols);
+  for (let i = 0; i < weights.data.length; i++) {
+    penalty += Math.abs(weights.data[i]);
+    gradient.data[i] = lambda * Math.sign(weights.data[i]);
+  }
+  penalty *= lambda;
+  return { penalty, gradient };
+}
+
+/**
+ * L2 regularization on Matrix weights.
+ */
+export function l2Regularization(weights, lambda = 0.01) {
+  let penalty = 0;
+  const gradient = new Matrix(weights.rows, weights.cols);
+  for (let i = 0; i < weights.data.length; i++) {
+    penalty += weights.data[i] * weights.data[i];
+    gradient.data[i] = lambda * weights.data[i];
+  }
+  penalty *= 0.5 * lambda;
+  return { penalty, gradient };
+}
+
+/**
+ * Elastic net regularization on Matrix weights.
+ */
+export function elasticNet(weights, lambda = 0.01, ratio = 0.5) {
+  const l1 = l1Regularization(weights, lambda);
+  const l2 = l2Regularization(weights, lambda);
+  const gradient = new Matrix(weights.rows, weights.cols);
+  for (let i = 0; i < weights.data.length; i++) {
+    gradient.data[i] = ratio * l1.gradient.data[i] + (1 - ratio) * l2.gradient.data[i];
+  }
+  return { penalty: ratio * l1.penalty + (1 - ratio) * l2.penalty, gradient };
+}
+
+/**
+ * Weight decay: multiply weights by (1 - decay).
+ */
+export function weightDecay(weights, decay = 0.01) {
+  const result = new Matrix(weights.rows, weights.cols);
+  for (let i = 0; i < weights.data.length; i++) {
+    result.data[i] = weights.data[i] * (1 - decay);
+  }
+  return result;
+}
+
+/**
+ * Max-norm constraint: clip weight vectors to max norm.
+ */
+export function maxNormConstraint(weights, maxNorm = 3.0) {
+  const result = new Matrix(weights.rows, weights.cols);
+  for (let r = 0; r < weights.rows; r++) {
+    let norm = 0;
+    for (let c = 0; c < weights.cols; c++) {
+      norm += weights.get(r, c) ** 2;
+    }
+    norm = Math.sqrt(norm);
+    const scale = norm > maxNorm ? maxNorm / norm : 1;
+    for (let c = 0; c < weights.cols; c++) {
+      result.set(r, c, weights.get(r, c) * scale);
+    }
+  }
+  return result;
+}
+
+/**
+ * Spectral norm alias.
+ */
+export const spectralNorm = spectralNormalization;
+
+/**
+ * Gradient clipping by global norm.
+ */
+export function gradientClipping(gradient, maxNorm = 1.0) {
+  let norm = 0;
+  for (let i = 0; i < gradient.data.length; i++) {
+    norm += gradient.data[i] ** 2;
+  }
+  norm = Math.sqrt(norm);
+  if (norm <= maxNorm) {
+    const result = new Matrix(gradient.rows, gradient.cols);
+    for (let i = 0; i < gradient.data.length; i++) result.data[i] = gradient.data[i];
+    return result;
+  }
+  const scale = maxNorm / norm;
+  const result = new Matrix(gradient.rows, gradient.cols);
+  for (let i = 0; i < gradient.data.length; i++) {
+    result.data[i] = gradient.data[i] * scale;
+  }
+  return result;
+}
