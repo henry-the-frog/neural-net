@@ -21,6 +21,71 @@ for (let i = 0; i < 1000; i++) {
 console.log(net.predict(inputs)); // XOR!
 ```
 
+### More Examples
+
+<details>
+<summary><b>🧠 Transformer (Self-Attention)</b></summary>
+
+```javascript
+import { MultiHeadAttention } from './src/multi-head-attention.js';
+import { Matrix } from './src/matrix.js';
+
+const attn = new MultiHeadAttention(16, 4); // dim=16, 4 heads
+const seq = Matrix.random(8, 16); // 8 tokens, 16 dims
+const output = attn.forward(seq);  // Self-attention output
+```
+</details>
+
+<details>
+<summary><b>🎮 Reinforcement Learning (DQN)</b></summary>
+
+```javascript
+import { DQN } from './src/dqn.js';
+
+const agent = new DQN({
+  stateDim: 4, actionDim: 2,
+  hiddenDim: 32, lr: 0.001,
+  gamma: 0.99, epsilon: 1.0,
+});
+
+// Training loop
+const state = [0.5, -0.3, 0.1, 0.8];
+const action = agent.act(state);
+agent.store(state, action, 1.0, [0.4, -0.2, 0.2, 0.7], false);
+agent.train(); // Experience replay + target network
+```
+</details>
+
+<details>
+<summary><b>🔬 Mixture of Experts</b></summary>
+
+```javascript
+import { MixtureOfExperts } from './src/moe.js';
+import { Matrix } from './src/matrix.js';
+
+const moe = new MixtureOfExperts(8, 4, 16, 8, 2);
+// 8 input dim, 4 experts, 16 hidden, 8 output, top-2 routing
+const x = Matrix.random(32, 8);     // Batch of 32
+const y = moe.forward(x);           // Routes each token to 2 best experts
+console.log(moe.routingDistribution()); // Expert load balance
+```
+</details>
+
+<details>
+<summary><b>🎨 Variational Autoencoder</b></summary>
+
+```javascript
+import { VAE } from './src/vae.js';
+
+const vae = new VAE(784, 256, 16, { beta: 1.0 }); // MNIST-sized
+const data = Array.from({length: 100}, () => 
+  Array.from({length: 784}, () => Math.random())
+);
+const { history } = vae.train(data, { epochs: 20 });
+const samples = vae.generate(5); // Generate 5 new images
+```
+</details>
+
 ## What's Inside
 
 ### Core (`matrix.js`, `network.js`, `loss.js`, `autograd.js`)
