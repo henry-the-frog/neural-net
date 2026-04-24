@@ -111,9 +111,11 @@ export { mse, crossEntropy, getLoss } from './loss.js';
 
 // Evaluation
 export {
-  confusionMatrix, precision, recall, f1Score, accuracy,
-  classificationReport, printConfusionMatrix,
+  accuracy, confusionMatrix, precisionRecallF1, topKAccuracy,
+  classificationReport, macroAverage, weightedAverage, microAverage,
+  rocAuc, mae, rmse, r2Score, matthewsCorrelation, cohensKappa,
 } from './metrics.js';
+export { mse as metricsMse } from './metrics.js';
 
 // Architecture Search
 export { DARTSCell, DARTSSearcher, MixedOp } from './darts.js';
