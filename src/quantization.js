@@ -148,6 +148,12 @@ export function compressionRatio(original, quantized) {
  * @returns {{ quantized: number[], scale: number, zeroPoint: number }}
  */
 export function quantize(values, bits = 8, symmetric = true) {
+  // Handle scalar input — assume [-1, 1] range
+  if (typeof values === 'number') {
+    const levels = (1 << bits) - 1;
+    const halfLevels = Math.floor(levels / 2);
+    return Math.round(values * halfLevels + halfLevels);
+  }
   const levels = (1 << bits) - 1;
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -173,8 +179,16 @@ export function quantize(values, bits = 8, symmetric = true) {
 /**
  * Dequantize integer values back to floats.
  */
-export function dequantize(quantized, scale, zeroPoint) {
-  return quantized.map(q => (q - zeroPoint) * scale);
+export function dequantize(quantized, scaleOrBits, zeroPoint) {
+  // Handle scalar input with bits (dequantize(value, bits))
+  if (typeof quantized === 'number' && zeroPoint === undefined) {
+    // Reconstruct: value was quantized to [-1, 1] range with N bits
+    const bits = scaleOrBits;
+    const levels = (1 << bits) - 1;
+    const halfLevels = Math.floor(levels / 2);
+    return (quantized - halfLevels) / halfLevels;
+  }
+  return quantized.map(q => (q - zeroPoint) * scaleOrBits);
 }
 
 /**

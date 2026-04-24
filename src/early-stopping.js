@@ -84,7 +84,7 @@ export function trainWithEarlyStopping(model, trainInputs, trainTargets, valInpu
     minDelta = 0,
   } = options;
 
-  const stopper = new EarlyStopping(patience, minDelta);
+  const stopper = new EarlyStopping({ patience, minDelta: minDelta || 1e-4 });
   const history = [];
   let totalEpochs = 0;
 
