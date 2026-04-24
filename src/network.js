@@ -536,49 +536,32 @@ export class Network {
         }
         case 'MixtureOfExperts': {
           if (!MixtureOfExperts) throw new Error('MixtureOfExperts not available for deserialization');
-          layer = new MixtureOfExperts(d.dModel || d.inputSize, d.dHidden || 16, d.numExperts, d.topK);
-          // Restore router weights (router is a Dense layer)
-          if (d.routerWeightShape && layer.router) {
-            layer.router.weights = new Matrix(d.routerWeightShape[0], d.routerWeightShape[1], new Float64Array(d.routerWeights));
-            layer.router.biases = new Matrix(d.routerBiasShape[0], d.routerBiasShape[1], new Float64Array(d.routerBiases));
-          } else if (d.routerWeightShape && layer.routerW) {
-            layer.routerW = new Matrix(d.routerWeightShape[0], d.routerWeightShape[1], new Float64Array(d.routerWeights));
-            layer.routerB = new Matrix(d.routerBiasShape[0], d.routerBiasShape[1], new Float64Array(d.routerBiases));
-          }
-          // Restore expert weights (Dense FFNs with up/down layers)
-          if (d.experts && layer.experts) {
-            for (let i = 0; i < Math.min(d.experts.length, layer.experts.length); i++) {
-              const ed = d.experts[i];
-              const expert = layer.experts[i];
-              // New format: up/down Dense layers
-              if (ed.up && expert.up) {
-                if (ed.up.weights) {
-                  expert.up.weights = new Matrix(ed.up.weights.shape[0], ed.up.weights.shape[1], new Float64Array(ed.up.weights.data));
-                }
-                if (ed.up.biases) {
-                  expert.up.biases = new Matrix(ed.up.biases.shape[0], ed.up.biases.shape[1], new Float64Array(ed.up.biases.data));
-                }
-              }
-              if (ed.down && expert.down) {
-                if (ed.down.weights) {
-                  expert.down.weights = new Matrix(ed.down.weights.shape[0], ed.down.weights.shape[1], new Float64Array(ed.down.weights.data));
-                }
-                if (ed.down.biases) {
-                  expert.down.biases = new Matrix(ed.down.biases.shape[0], ed.down.biases.shape[1], new Float64Array(ed.down.biases.data));
-                }
-              }
-              // Legacy format: W1/b1/W2/b2 (backward compat)
-              if (ed.W1 && expert.up) {
-                expert.up.weights = new Matrix(ed.W1.shape[0], ed.W1.shape[1], new Float64Array(ed.W1.data));
-              }
-              if (ed.b1 && expert.up) {
-                expert.up.biases = new Matrix(ed.b1.shape[0], ed.b1.shape[1], new Float64Array(ed.b1.data));
-              }
-              if (ed.W2 && expert.down) {
-                expert.down.weights = new Matrix(ed.W2.shape[0], ed.W2.shape[1], new Float64Array(ed.W2.data));
-              }
-              if (ed.b2 && expert.down) {
-                expert.down.biases = new Matrix(ed.b2.shape[0], ed.b2.shape[1], new Float64Array(ed.b2.data));
+          // Use fromJSON if available (new format)
+          if (d.inputDim && MixtureOfExperts.fromJSON) {
+            layer = MixtureOfExperts.fromJSON(d);
+          } else {
+            // Legacy format
+            layer = new MixtureOfExperts(
+              d.inputDim || d.dModel || d.inputSize || 4,
+              d.numExperts || 4,
+              d.hiddenDim || d.dHidden || 16,
+              d.outputDim || d.inputDim || d.dModel || d.inputSize || 4,
+              d.topK || 2
+            );
+            // Restore gate/router weights
+            if (d.gate && layer.gate) {
+              layer.gate = Dense.fromJSON(d.gate);
+            } else if (d.routerWeightShape && layer.gate) {
+              layer.gate.weights = new Matrix(d.routerWeightShape[0], d.routerWeightShape[1], new Float64Array(d.routerWeights));
+              layer.gate.biases = new Matrix(d.routerBiasShape[0], d.routerBiasShape[1], new Float64Array(d.routerBiases));
+            }
+            // Restore expert weights
+            if (d.experts && layer.experts) {
+              for (let i = 0; i < Math.min(d.experts.length, layer.experts.length); i++) {
+                const ed = d.experts[i];
+                const expert = layer.experts[i];
+                if (ed.up && expert.up) expert.up = Dense.fromJSON(ed.up);
+                if (ed.down && expert.down) expert.down = Dense.fromJSON(ed.down);
               }
             }
           }
@@ -706,48 +689,10 @@ export class Network {
         // Serialize residual weights (nested array [inputSize][outputSize])
         info.residualWeights = layer.residualWeights.map(row => Array.from(row));
       } else if (layer.constructor.name === 'MixtureOfExperts') {
-        info.dModel = layer.inputDim || layer.inputSize;
-        info.inputSize = layer.inputDim || layer.inputSize;
-        info.numExperts = layer.numExperts || layer.experts?.length;
-        info.topK = layer.topK;
-        info.dHidden = layer.hiddenDim || layer.dHidden || layer.experts?.[0]?.up?.weights?.cols;
-        info.outputSize = layer.inputDim || layer.outputSize;
-        // Serialize router weights (router is a Dense layer)
-        if (layer.router) {
-          info.routerWeights = Array.from(layer.router.weights.data);
-          info.routerWeightShape = [layer.router.weights.rows, layer.router.weights.cols];
-          info.routerBiases = Array.from(layer.router.biases.data);
-          info.routerBiasShape = [layer.router.biases.rows, layer.router.biases.cols];
-        } else if (layer.routerW) {
-          info.routerWeights = Array.from(layer.routerW.data);
-          info.routerWeightShape = [layer.routerW.rows, layer.routerW.cols];
-          info.routerBiases = Array.from(layer.routerB.data);
-          info.routerBiasShape = [layer.routerB.rows, layer.routerB.cols];
-        }
-        // Serialize expert networks (Dense FFNs with up/down layers)
-        if (layer.experts) {
-          info.experts = layer.experts.map(expert => ({
-            up: {
-              weights: {
-                data: Array.from(expert.up.weights.data),
-                shape: [expert.up.weights.rows, expert.up.weights.cols],
-              },
-              biases: {
-                data: Array.from(expert.up.biases.data),
-                shape: [expert.up.biases.rows, expert.up.biases.cols],
-              },
-            },
-            down: {
-              weights: {
-                data: Array.from(expert.down.weights.data),
-                shape: [expert.down.weights.rows, expert.down.weights.cols],
-              },
-              biases: {
-                data: Array.from(expert.down.biases.data),
-                shape: [expert.down.biases.rows, expert.down.biases.cols],
-              },
-            },
-          }));
+        // Use MoE's own toJSON for clean serialization
+        if (layer.toJSON) {
+          const moeJson = layer.toJSON();
+          Object.assign(info, moeJson);
         }
       }
 

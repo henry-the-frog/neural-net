@@ -83,24 +83,42 @@ export function quantizePerChannel(weights, bits = 8) {
   return { quantized, scales, zeroPoints, shape: [rows, cols] };
 }
 
-export function dequantizePerChannel(quantized, scales, zeroPoints) {
-  // Handle both formats
-  if (zeroPoints && Array.isArray(quantized[0])) {
-    // Plain 2D array version
-    return quantized.map((row, i) =>
+export function dequantizePerChannel(quantizedOrObj, scales, zeroPoints) {
+  // Handle old API: dequantizePerChannel({ quantized, scales, shape })
+  if (quantizedOrObj && typeof quantizedOrObj === 'object' && !Array.isArray(quantizedOrObj) && quantizedOrObj.quantized !== undefined) {
+    const obj = quantizedOrObj;
+    if (obj.zeroPoints) {
+      return dequantizePerChannel(obj.quantized, obj.scales, obj.zeroPoints);
+    }
+    const result = new Matrix(obj.shape[0], obj.shape[1]);
+    const cols = obj.shape[1];
+    for (let i = 0; i < obj.shape[0]; i++) {
+      for (let j = 0; j < cols; j++) {
+        result.set(i, j, obj.quantized[i * cols + j] * obj.scales[i]);
+      }
+    }
+    return result;
+  }
+  // Handle both formats with separate args
+  if (zeroPoints && Array.isArray(quantizedOrObj[0])) {
+    return quantizedOrObj.map((row, i) =>
       row.map(q => (q - zeroPoints[i]) * scales[i])
     );
   }
-  // Matrix version (old format)
-  const shape = [quantized.length / scales.length, scales.length];
-  const result = new Matrix(shape[0], shape[1]);
-  const cols = shape[1];
-  for (let i = 0; i < shape[0]; i++) {
-    for (let j = 0; j < cols; j++) {
-      result.set(i, j, quantized[i * cols + j] * scales[i]);
+  // Matrix version (separate args)
+  if (scales) {
+    const totalLen = quantizedOrObj.length;
+    const numRows = scales.length;
+    const numCols = totalLen / numRows;
+    const result = new Matrix(numRows, numCols);
+    for (let i = 0; i < numRows; i++) {
+      for (let j = 0; j < numCols; j++) {
+        result.set(i, j, quantizedOrObj[i * numCols + j] * scales[i]);
+      }
     }
+    return result;
   }
-  return result;
+  return quantizedOrObj;
 }
 
 /**

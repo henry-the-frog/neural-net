@@ -22,30 +22,32 @@ describe('Contrastive Learning', () => {
   });
 
   test('NT-Xent loss is finite', () => {
+    // Pairing convention: (i, i+N) — [view1_s0, view1_s1, view2_s0, view2_s1]
     const embeddings = [
-      new Float64Array([1, 0, 0]),
-      new Float64Array([0.9, 0.1, 0]), // Positive pair
-      new Float64Array([0, 1, 0]),
-      new Float64Array([0.1, 0.9, 0]), // Positive pair
+      new Float64Array([1, 0, 0]),       // sample 0, view 1
+      new Float64Array([0, 1, 0]),       // sample 1, view 1
+      new Float64Array([0.9, 0.1, 0]),   // sample 0, view 2
+      new Float64Array([0.1, 0.9, 0]),   // sample 1, view 2
     ];
-    const { loss } = ntXentLoss(embeddings);
+    const loss = ntXentLoss(embeddings);
     assert.ok(isFinite(loss), `Loss should be finite: ${loss}`);
   });
 
   test('NT-Xent loss is lower for well-separated pairs', () => {
-    // Good: pairs are close to each other, far from others
+    // Good: positive pairs (i, i+N) are close, negatives are far
+    // Layout: [s0_v1, s1_v1, s0_v2, s1_v2]
     const good = [
-      new Float64Array([1, 0, 0]), new Float64Array([0.95, 0.05, 0]),
-      new Float64Array([0, 1, 0]), new Float64Array([0.05, 0.95, 0]),
+      new Float64Array([1, 0, 0]), new Float64Array([0, 1, 0]),     // views 1
+      new Float64Array([0.95, 0.05, 0]), new Float64Array([0.05, 0.95, 0]), // views 2 (close to view 1)
     ];
-    // Bad: pairs are close to wrong partners
+    // Bad: positive pairs are orthogonal
     const bad = [
-      new Float64Array([1, 0, 0]), new Float64Array([0, 1, 0]),
-      new Float64Array([0.9, 0.1, 0]), new Float64Array([0.1, 0.9, 0]),
+      new Float64Array([1, 0, 0]), new Float64Array([0.9, 0.1, 0]), // views 1
+      new Float64Array([0, 1, 0]), new Float64Array([0.1, 0.9, 0]), // views 2 (pair 0→2 is orth, pair 1→3 is orth)
     ];
     
-    const goodLoss = ntXentLoss(good).loss;
-    const badLoss = ntXentLoss(bad).loss;
+    const goodLoss = ntXentLoss(good);
+    const badLoss = ntXentLoss(bad);
     assert.ok(goodLoss < badLoss, `Good ${goodLoss} should be < bad ${badLoss}`);
   });
 
@@ -62,16 +64,16 @@ describe('Contrastive Learning', () => {
 
   test('triplet loss is 0 when margin satisfied', () => {
     const anchor = new Float64Array([1, 0, 0]);
-    const positive = new Float64Array([0.9, 0.1, 0]); // Close
-    const negative = new Float64Array([-1, 0, 0]); // Far
+    const positive = new Float64Array([0.9, 0.1, 0]);
+    const negative = new Float64Array([-1, 0, 0]);
     const loss = tripletLoss(anchor, positive, negative, 0.2);
     assert.equal(loss, 0, 'Should be 0 when negative is much farther than positive');
   });
 
   test('triplet loss is positive when margin violated', () => {
     const anchor = new Float64Array([0, 0, 0]);
-    const positive = new Float64Array([2, 0, 0]); // Far from anchor
-    const negative = new Float64Array([0.5, 0, 0]); // Closer than positive!
+    const positive = new Float64Array([2, 0, 0]);
+    const negative = new Float64Array([0.5, 0, 0]);
     const loss = tripletLoss(anchor, positive, negative, 0.2);
     assert.ok(loss > 0, `Loss should be positive when negative is closer: ${loss}`);
   });

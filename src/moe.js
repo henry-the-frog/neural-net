@@ -321,6 +321,11 @@ export class MixtureOfExperts {
   }
 
   toJSON() {
+    const serializeDense = (layer) => ({
+      weights: { data: Array.from(layer.weights.data), shape: [layer.weights.rows, layer.weights.cols] },
+      biases: { data: Array.from(layer.biases.data), shape: [layer.biases.rows, layer.biases.cols] },
+      activation: layer.activation?.name || 'linear',
+    });
     return {
       type: 'MixtureOfExperts',
       inputDim: this.inputDim,
@@ -329,8 +334,8 @@ export class MixtureOfExperts {
       outputDim: this.outputDim,
       topK: this.topK,
       loadBalanceCoeff: this.loadBalanceCoeff,
-      gate: this.gate.toJSON(),
-      experts: this.experts.map(e => ({ up: e.up.toJSON(), down: e.down.toJSON() })),
+      gate: serializeDense(this.gate),
+      experts: this.experts.map(e => ({ up: serializeDense(e.up), down: serializeDense(e.down) })),
     };
   }
 
@@ -338,11 +343,21 @@ export class MixtureOfExperts {
     const moe = new MixtureOfExperts(
       json.inputDim, json.numExperts, json.hiddenDim, json.outputDim, json.topK, json.loadBalanceCoeff
     );
-    moe.gate = Dense.fromJSON(json.gate);
-    moe.experts = json.experts.map(e => ({
-      up: Dense.fromJSON(e.up),
-      down: Dense.fromJSON(e.down),
-    }));
+    const deserializeDense = (layer, data) => {
+      if (data.weights) {
+        layer.weights = new Matrix(data.weights.shape[0], data.weights.shape[1], new Float64Array(data.weights.data));
+      }
+      if (data.biases) {
+        layer.biases = new Matrix(data.biases.shape[0], data.biases.shape[1], new Float64Array(data.biases.data));
+      }
+    };
+    if (json.gate) deserializeDense(moe.gate, json.gate);
+    if (json.experts) {
+      for (let i = 0; i < Math.min(json.experts.length, moe.experts.length); i++) {
+        if (json.experts[i].up) deserializeDense(moe.experts[i].up, json.experts[i].up);
+        if (json.experts[i].down) deserializeDense(moe.experts[i].down, json.experts[i].down);
+      }
+    }
     return moe;
   }
 
