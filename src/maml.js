@@ -112,11 +112,13 @@ export class MAML {
     innerLR = 0.01,
     outerLR = 0.001,
     innerSteps = 5,
+    gradClipNorm = 10.0,
   } = {}) {
     this.model = new MAMLNetwork(layerSizes);
     this.innerLR = innerLR;
     this.outerLR = outerLR;
     this.innerSteps = innerSteps;
+    this.gradClipNorm = gradClipNorm;
   }
 
   // Inner loop: adapt to a single task
@@ -155,6 +157,17 @@ export class MAML {
       // Meta-gradient: direction that improves post-adaptation performance
       for (let i = 0; i < metaParams.length; i++) {
         metaGradients[i] += adaptedGrads[i] / tasks.length;
+      }
+    }
+
+    // Gradient clipping (L2 norm)
+    if (this.gradClipNorm > 0) {
+      const norm = Math.sqrt(metaGradients.reduce((s, g) => s + g * g, 0));
+      if (norm > this.gradClipNorm) {
+        const scale = this.gradClipNorm / norm;
+        for (let i = 0; i < metaGradients.length; i++) {
+          metaGradients[i] *= scale;
+        }
       }
     }
 
