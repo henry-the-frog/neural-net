@@ -142,7 +142,7 @@ for (let epoch = 0; epoch < 2000; epoch++) {
 // Test
 console.log('\nPredictions:');
 for (let i = 0; i < 4; i++) {
-  const row = Matrix.fromArray([inputs.getRow(i)]);
+  const row = inputs.slice(i, i + 1);
   const pred = net.predict(row).get(0, 0);
   const actual = targets.get(i, 0);
   console.log(`  [${inputs.get(i,0)}, ${inputs.get(i,1)}] → ${pred.toFixed(3)} (expected ${actual})`);
